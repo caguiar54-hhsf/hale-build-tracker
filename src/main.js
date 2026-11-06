@@ -1150,20 +1150,39 @@ document.addEventListener("click", async e => {
 
 /* ---- start ---- */
 async function startSignedIn(){
-  me = session.user.id;
-  $("#whoami").textContent = myName();
-  await supabase.rpc("accept_invites").catch(()=>{});
-  const last = lsGet(LAST_KEY);
-  const { data } = await supabase.from("project_members").select("project_id").eq("user_id", me);
-  const ids = (data||[]).map(r=>r.project_id);
-  if(last && ids.includes(last)) return openProject(last);
-  if(ids.length===1) return openProject(ids[0]);
-  showPicker();
+  try {
+    me = session.user.id;
+    $("#whoami").textContent = myName();
+    // Supabase query builders are thenables without .catch, so errors come back in { error } instead
+    const { error: invErr } = await supabase.rpc("accept_invites");
+    if(invErr) console.warn("accept_invites:", invErr.message);
+    if(/^#(access_token|refresh_token|type)=/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search);
+    const last = lsGet(LAST_KEY);
+    const { data, error } = await supabase.from("project_members").select("project_id").eq("user_id", me);
+    if(error) throw error;
+    const ids = (data||[]).map(r=>r.project_id);
+    if(last && ids.includes(last)) return openProject(last);
+    if(ids.length===1) return openProject(ids[0]);
+    showPicker();
+  } catch(e){
+    console.error(e);
+    showPicker("Couldn't finish signing in. Check your connection and reload the page.");
+  }
 }
+
+// Expired or already-used email links come back as #error=...&error_description=...
+const linkError = (() => {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if(!h.get("error")) return null;
+  history.replaceState(null, "", location.pathname + location.search);
+  return /expired|invalid/i.test(h.get("error_description")||"") || h.get("error_code")==="otp_expired"
+    ? "That email link has expired or was already used. If you already confirmed, just sign in. Otherwise sign up again to get a fresh link."
+    : (h.get("error_description") || "That link didn't work. Try signing in.");
+})();
 let started = false;
 supabase.auth.onAuthStateChange((event, s) => {
   session = s;
   if(event==="PASSWORD_RECOVERY"){ started = true; showScreen("auth"); setAuthMode("reset"); return; }
-  if(event==="SIGNED_OUT" || !s){ started = false; projectId = null; me = null; if(channel){ supabase.removeChannel(channel); channel = null; } showScreen("auth"); setAuthMode("signin"); return; }
+  if(event==="SIGNED_OUT" || !s){ started = false; projectId = null; me = null; if(channel){ supabase.removeChannel(channel); channel = null; } showScreen("auth"); setAuthMode("signin"); if(linkError && event==="INITIAL_SESSION"){ $("#authErr").textContent = linkError; $("#authErr").hidden = false; } return; }
   if((event==="SIGNED_IN" || event==="INITIAL_SESSION") && !started && authMode!=="reset"){ started = true; setTimeout(startSignedIn, 0); }
 });
