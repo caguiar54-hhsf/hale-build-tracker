@@ -570,3 +570,7 @@ nav.sub a svg.ic{width:15px;height:15px;opacity:.85}
   nav.tabs a{display:flex}
   nav.tabs svg{width:21px;height:21px;opacity:1}
 }
+.ch-col path.ch-back{fill:var(--c);opacity:.24}
+.ch-tip i.sw.ch-backsw{opacity:.35}
+.legend .budkey[style*="transparent"]::before{display:none}
+.ch-pt{fill:var(--surface);stroke:var(--c);stroke-width:2}

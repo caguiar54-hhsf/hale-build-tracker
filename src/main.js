@@ -5,7 +5,7 @@ import "@fontsource/ibm-plex-mono/400.css";
 import "./style.css";
 import { supabase } from "./supabase.js";
 import { icon } from "./icons.js";
-import { stackedColumns, lines, monthRange, monthLabel, setMoneyFormat } from "./charts.js";
+import { stackedColumns, lines, overlayColumns, monthRange, monthLabel, setMoneyFormat } from "./charts.js";
 
 const $ = s => document.querySelector(s);
 /* IBM Plex draws the ʻokina (U+02BB) with wide spacing; show the tighter ‘ instead. Stored text is unchanged. */
@@ -199,7 +199,7 @@ function drawCharts(){
   setMoneyFormat(money);
   document.querySelectorAll("#view .chart[data-chart]").forEach(el => {
     const s = chartSpecs[el.dataset.chart]; if(!s || !el.clientWidth) return;
-    try { (s.type==="columns" ? stackedColumns : lines)(el, s); } catch(e){ console.warn("chart", e); }
+    try { ({columns:stackedColumns, overlay:overlayColumns, lines})[s.type](el, s); } catch(e){ console.warn("chart", e); }
   });
 }
 let chartResize = null, chartW = window.innerWidth;
@@ -255,11 +255,11 @@ function drawChart(){
   const months = monthRange([...Object.keys(fundedBy), ...Object.keys(spentBy)], ymOf(today()));
   if(!months.length) return "";
   const f = cumulative(months, m => fundedBy[m]||0), s = cumulative(months, m => spentBy[m]||0);
-  const series = [{label:"Funded by the lender", cls:"s-unset", values:f.values, step:true, c:"var(--c-unset)"}, {label:"Spent from the loan", cls:"s-loan", values:s.values, area:true, c:"var(--c-loan)"}];
-  chartSpecs.drawsLine = {type:"lines", months:f.months, series, refs: loan ? [{value:loan, label:"Loan"}] : [], label:"Loan money funded compared with loan money spent, over time"};
-  return `<div class="panel" style="margin-bottom:16px"><h3><span class="hi">${icon("chartLine")}Funded vs. spent over time</span></h3>${chartBox("drawsLine","Loan funded versus spent")}
-    <div class="legend chart-legend">${series.map(x=>`<span style="--c:${x.c}">${esc(x.label)}</span>`).join("")}${loan?`<span class="budkey">Loan ${money(loan)} (dashed)</span>`:""}</div>
-    <p class="hint chart-note">The gap between the lines is loan money on hand. If the indigo line goes above the gray one, payments were made before the draw came in.</p>
+  const series = [{label:"Funded to date", cls:"s-total", values:f.values, dots:true, c:"var(--c-total)"}, {label:"Spent to date", cls:"s-loan", values:s.values, dots:true, c:"var(--c-loan)"}];
+  chartSpecs.drawsLine = {type:"lines", months:f.months, series, refs:[], label:"Loan money funded to date compared with loan money spent to date"};
+  return `<div class="panel" style="margin-bottom:16px"><h3><span class="hi">${icon("chartLine")}Loan funded vs. spent</span></h3>${chartBox("drawsLine","Loan funded versus spent")}
+    <div class="legend chart-legend">${series.map(x=>`<span style="--c:${x.c}">${esc(x.label)}</span>`).join("")}${loan?`<span class="budkey" style="--c:transparent">Loan total ${money(loan)}</span>`:""}</div>
+    <p class="hint chart-note">The gap between the two lines is loan money funded but not spent yet.</p>
     ${chartTable(["Month","Funded","Spent"], f.months.slice(1).map((m,i)=>[monthLabel(m,true), f.values[i+1], s.values[i+1]]).reverse())}</div>`;
 }
 function homeChart(){

@@ -46,7 +46,9 @@ function frame(el, opts) {
   return { W, H, pad, iw, ih };
 }
 function axes({ W, pad, iw, ih }, ymax, xLabels, xAt) {
-  const ticks = 4; let g = "";
+  // pick a tick count that gives round steps ($50k, not $62.5k)
+  const ticks = [4, 5, 3, 2].find((t) => { const s = ymax / t, m = s / Math.pow(10, Math.floor(Math.log10(s))); return [1, 2, 2.5, 5].some((x) => Math.abs(m - x) < 1e-9); }) || 4;
+  let g = "";
   for (let i = 0; i <= ticks; i++) {
     const v = (ymax / ticks) * i, y = pad.t + ih - (v / ymax) * ih;
     g += `<line class="ch-grid" x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}"/>`;
@@ -151,6 +153,7 @@ export function lines(el, { series, months, refs = [], label, height }) {
     });
     if (s.area && n > 1) g += `<path class="${s.cls} ch-area" d="${d}L${pts[n - 1][0]},${pad.t + ih}L${pts[0][0]},${pad.t + ih}Z"/>`;
     g += `<path class="${s.cls} ch-line" d="${d}"/>`;
+    if (s.dots && n <= 24) pts.slice(0, -1).forEach(([x, y]) => { g += `<circle class="${s.cls} ch-pt" cx="${x}" cy="${y}" r="3"/>`; });
     const [lx, ly] = pts[n - 1];
     g += `<circle class="${s.cls} ch-end" cx="${lx}" cy="${ly}" r="4"/>`;
     if (s.endLabel !== false) g += `<text class="ch-endlab" x="${lx + 8}" y="${ly + 4}">${fmtShort(s.values[n - 1])}</text>`;
@@ -166,6 +169,32 @@ export function lines(el, { series, months, refs = [], label, height }) {
       dots.forEach((d, j) => { d.setAttribute("visibility", on ? "visible" : "hidden"); if (on) { d.setAttribute("cx", xAt(i)); d.setAttribute("cy", yAt(series[j].values[i])); } });
       if (on) { cross.setAttribute("x1", xAt(i)); cross.setAttribute("x2", xAt(i)); }
     });
+}
+
+/* Overlaid monthly columns: a pale "back" total (e.g. funded to date) with a solid "front" amount inside it
+   (e.g. spent to date). The pale part showing above the solid part is what's left. */
+export function overlayColumns(el, { rows, back, front, refs = [], label, gapLabel = "Left" }) {
+  const f = frame(el, { padRight: refs.length ? 52 : 14 }); const { pad, iw, ih, W } = f; const n = rows.length;
+  const ymax = niceMax(Math.max(...rows.map((r) => Math.max(r.back, r.front)), ...refs.map((r) => r.value), 1) * 1.04);
+  const band = iw / n, bw = Math.max(8, Math.min(34, band * 0.6));
+  const xAt = (i) => pad.l + band * i + band / 2;
+  const yAt = (v) => pad.t + ih - (v / ymax) * ih;
+  let g = axes(f, ymax, rows.map((r, i) => (r.month.endsWith("-01") || i === 0 ? `${monthLabel(r.month)} ’${r.month.slice(2, 4)}` : monthLabel(r.month))), xAt);
+  refs.forEach((r) => { const y = yAt(r.value);
+    g += `<line class="ch-ref" x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}"/><text class="ch-reflab" x="${W - pad.r + 6}" y="${y + 4}">${esc(r.label)}</text>`; });
+  rows.forEach((r, i) => {
+    const x = xAt(i) - bw / 2; const base = pad.t + ih;
+    g += `<g class="ch-col" data-i="${i}">`;
+    if (r.back > 0) { const h = base - yAt(r.back); g += `<path class="${back.cls} ch-back" d="${roundTop(x, base - h, bw, h, 4)}"/>`; }
+    if (r.front > 0) { const h = base - yAt(r.front); g += `<path class="${front.cls}" d="${roundTop(x, base - h, bw, h, r.front >= r.back ? 4 : 0)}"/>`; }
+    g += `</g>`;
+  });
+  g += `<line class="ch-base" x1="${pad.l}" x2="${W - pad.r}" y1="${pad.t + ih}" y2="${pad.t + ih}"/>`;
+  const svg = mount(el, g, f, label);
+  const cols = [...svg.querySelectorAll(".ch-col")];
+  wireHover(el, svg, n, xAt, (i) => { const r = rows[i]; const gap = r.back - r.front;
+    return `<b>${monthLabel(r.month, true)}</b><div><i class="sw ${back.cls} ch-backsw"></i>${esc(back.label)}<span>${fmt(r.back)}</span></div><div><i class="sw ${front.cls}"></i>${esc(front.label)}<span>${fmt(r.front)}</span></div><div class="tot">${gap < 0 ? "Paid ahead of funding" : esc(gapLabel)}<span>${fmt(Math.abs(gap))}</span></div>`;
+  }, (i) => cols.forEach((c, j) => c.classList.toggle("dim", i >= 0 && j !== i)));
 }
 
 let fmt = (n) => `$${Math.round(n).toLocaleString()}`;
