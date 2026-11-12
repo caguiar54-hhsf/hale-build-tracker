@@ -1,3 +1,7 @@
+import "@fontsource/ibm-plex-sans/400.css";
+import "@fontsource/ibm-plex-sans/500.css";
+import "@fontsource/ibm-plex-sans/600.css";
+import "@fontsource/ibm-plex-mono/400.css";
 import "./style.css";
 import { supabase } from "./supabase.js";
 
@@ -239,10 +243,10 @@ function vOverview(){
     <div class="panel">
       <h3>Budget</h3>
       ${t.budget ? `<div class="meter"><div class="paid" style="width:${pct(t.paid)}%"></div><div class="est" style="width:${pct(t.est)}%"></div></div>
-      <div class="legend"><span style="--c:var(--good)">Paid ${money(t.paid)}</span><span style="--c:var(--warn)">Owed or quoted ${money(t.est)}</span><span style="--c:var(--sunk)">Unallocated ${money(Math.max(0,t.left))}</span></div>
+      <div class="legend"><span style="--c:var(--good)">Paid ${money(t.paid)}</span><span style="--c:var(--warn)">Owed or quoted ${money(t.est)}</span><span style="--c:var(--line)">Unallocated ${money(Math.max(0,t.left))}</span></div>
       ${t.left<0 ? `<p style="color:var(--bad);font-weight:600;margin:10px 0 0">Over budget by ${money(-t.left)} including quotes.</p>`:""}`
       : `<p class="empty">Paid so far: ${money(t.paid)}. Add a total budget in project details to track what's left.</p>`}
-      ${(+p.loanAmount || S.draws.length) ? (()=>{ const f=S.draws.filter(d=>d.status==="funded").reduce((a,d)=>a+(+d.amount||0),0); return `<p style="margin:12px 0 0;font-size:.9rem">Loan draws funded: <b class="mono">${money(f)}</b>${+p.loanAmount?` of <b class="mono">${money(p.loanAmount)}</b>`:""}</p>`; })() : ""}
+      ${(+p.loanAmount || S.draws.length) ? (()=>{ const f=S.draws.filter(d=>d.status==="funded").reduce((a,d)=>a+(+d.amount||0),0); return `<p style="margin:12px 0 0;font-size:.9rem">Loan draws funded: <b class="num">${money(f)}</b>${+p.loanAmount?` of <b class="num">${money(p.loanAmount)}</b>`:""}</p>`; })() : ""}
     </div>
     <div class="panel">
       <h3>Needs attention</h3>
@@ -265,7 +269,7 @@ function phaseMoneyLine(p, g){
   const scale = Math.max(bud, g.committed, 1);
   const w = x => (x/scale*100).toFixed(2);
   return `<div class="pmoney">
-    <div class="meter"><div style="width:${w(g.paid)}%;background:var(--good)"></div><div style="width:${w(g.held)}%;background:var(--accent)"></div><div style="width:${w(g.owed+g.quoted)}%;background:var(--warn);opacity:.55"></div>${bud?`<i class="bud" style="left:${w(bud)}%" title="Budget ${money(bud)}"></i>`:""}</div>
+    <div class="meter"><div style="width:${w(g.paid)}%;background:var(--good)"></div><div style="width:${w(g.held)}%;background:var(--held)"></div><div style="width:${w(g.owed+g.quoted)}%;background:var(--warn);opacity:.55"></div>${bud?`<i class="bud" style="left:${w(bud)}%" title="Budget ${money(bud)}"></i>`:""}</div>
     <div class="hint num">${money(g.paid)} paid${g.owed+g.held+g.quoted>0.004?` · ${money(g.owed+g.held+g.quoted)} owed or quoted`:""}${bud?` · budget ${money(bud)}`:""}
       ${over ? ` <span class="pill failed">Over by ${money(g.committed-bud)}</span>` : bud ? ` · <span style="color:var(--good)">${money(bud-g.committed)} left</span>` : ""}
       ${g.n ? ` · <a class="ext" href="#budget" data-act="phaseCosts" data-id="${esc(p.id)}">${g.n} cost${g.n===1?"":"s"}</a>` : ""}</div>
@@ -285,8 +289,8 @@ function vPhases(){
     </div></div>
   ${S.phases.length && (phaseBud || committed) ? `<div class="tiles">
     <div class="tile"><div class="label">Phase budgets</div><div class="v num">${phaseBud?money(phaseBud):"—"}</div><div class="hint">${!phaseBud ? "Tap Edit on a phase to set one" : projBud ? (Math.abs(phaseBud-projBud)<0.5 ? "Matches the total budget" : phaseBud>projBud ? `${money(phaseBud-projBud)} more than the total budget` : `${money(projBud-phaseBud)} of the total budget not assigned`) : "Total budget not set"}</div></div>
-    <div class="tile" style="border-top-color:var(--good)"><div class="label">Paid on phases</div><div class="v num">${money(S.phases.reduce((a,p)=>a+pm[p.id].paid,0))}</div><div class="hint">${pm[""].n?`Plus ${money(pm[""].paid)} on costs with no phase`:"All costs have a phase"}</div></div>
-    <div class="tile" style="border-top-color:${overN?"var(--bad)":"var(--good)"}"><div class="label">Phases over budget</div><div class="v num" style="color:${overN?"var(--bad)":"inherit"}">${overN}</div><div class="hint">${overN?"Counting contracts and quotes":"None so far"}</div></div>
+    <div class="tile"><div class="label">Paid on phases</div><div class="v num">${money(S.phases.reduce((a,p)=>a+pm[p.id].paid,0))}</div><div class="hint">${pm[""].n?`Plus ${money(pm[""].paid)} on costs with no phase`:"All costs have a phase"}</div></div>
+    <div class="tile"><div class="label">Phases over budget</div><div class="v num" style="color:${overN?"var(--bad)":"inherit"}">${overN}</div><div class="hint">${overN?"Counting contracts and quotes":"None so far"}</div></div>
   </div>` : ""}
   <div class="panel" style="padding-block:4px">
     ${S.phases.length ? S.phases.map((p,i)=>`
@@ -343,24 +347,24 @@ function vBudget(){
     </div></div>
   <div class="tiles">
     <div class="tile"><div class="label">Total budget</div><div class="v num">${t.budget?money(t.budget):"—"}</div><div class="hint">${t.budget?`${money(t.committed)} committed`:`<button class="btn-link write" data-act="project">Set a budget</button>`}</div></div>
-    <div class="tile" style="border-top-color:var(--good)"><div class="label">Paid so far</div><div class="v num">${money(t.paid)}</div><div class="hint">${t.budget?Math.round(t.paid/t.budget*100)+"% of budget":""}</div></div>
-    <div class="tile" style="border-top-color:var(--warn)"><div class="label">Still owed</div><div class="v num">${money(t.owed)}</div><div class="hint">On contracts and orders</div></div>
-    <div class="tile" style="border-top-color:var(--accent)"><div class="label">Retainage held</div><div class="v num">${money(t.held)}</div><div class="hint">Release when work is accepted</div></div>
-    <div class="tile" style="border-top-color:var(--line)"><div class="label">Quotes pending</div><div class="v num">${money(t.quoted)}</div><div class="hint">Not agreed yet</div></div>
-    <div class="tile" style="border-top-color:${t.left<0?"var(--bad)":"var(--good)"}"><div class="label">Left in budget</div><div class="v num" style="color:${t.left<0?"var(--bad)":"inherit"}">${t.budget?money(t.left):"—"}</div><div class="hint">After everything above</div></div>
+    <div class="tile"><div class="label">Paid so far</div><div class="v num">${money(t.paid)}</div><div class="hint">${t.budget?Math.round(t.paid/t.budget*100)+"% of budget":""}</div></div>
+    <div class="tile"><div class="label">Still owed</div><div class="v num">${money(t.owed)}</div><div class="hint">On contracts and orders</div></div>
+    <div class="tile"><div class="label">Retainage held</div><div class="v num">${money(t.held)}</div><div class="hint">Release when work is accepted</div></div>
+    <div class="tile"><div class="label">Quotes pending</div><div class="v num">${money(t.quoted)}</div><div class="hint">Not agreed yet</div></div>
+    <div class="tile"><div class="label">Left in budget</div><div class="v num" style="color:${t.left<0?"var(--bad)":"inherit"}">${t.budget?money(t.left):"—"}</div><div class="hint">After everything above</div></div>
   </div>
   ${(()=>{ const f = fundingSplit(); const tot = f.loan+f.own+f.unset; if(!tot) return "";
     const w = x => (x/tot*100).toFixed(2);
     return `<div class="panel" style="margin-bottom:16px"><div class="toolbar" style="margin-bottom:10px"><h3 style="margin:0">Where the money came from</h3><a class="ext" href="#draws">Loan draws</a></div>
-      <div class="meter fund"><div style="width:${w(f.loan)}%;background:var(--accent)"></div><div style="width:${w(f.own)}%;background:var(--good)"></div><div style="width:${w(f.unset)}%;background:var(--line)"></div></div>
-      <div class="legend num"><span style="--c:var(--accent)">Construction loan ${money(f.loan)}</span><span style="--c:var(--good)">Own money ${money(f.own)}</span>${f.unset?`<span style="--c:var(--line)">Not specified ${money(f.unset)}</span>`:""}</div>
+      <div class="meter fund"><div style="width:${w(f.loan)}%;background:var(--loan)"></div><div style="width:${w(f.own)}%;background:var(--good)"></div><div style="width:${w(f.unset)}%;background:var(--line)"></div></div>
+      <div class="legend num"><span style="--c:var(--loan)">Construction loan ${money(f.loan)}</span><span style="--c:var(--good)">Own money ${money(f.own)}</span>${f.unset?`<span style="--c:var(--line)">Not specified ${money(f.unset)}</span>`:""}</div>
       ${f.nUnset ? `<p class="hint" style="margin:8px 0 0">${f.nUnset} payment${f.nUnset>1?"s don't":" doesn't"} say where the money came from. Open the cost and pick the source under Payments.</p>` : ""}</div>`; })()}
   ${rows.length ? `<div class="panel" style="margin-bottom:16px">
     <div class="toolbar" style="margin-bottom:12px"><h3 style="margin:0">Spending by ${ {phase:"phase",category:"category",vendor:"vendor"}[ui.spendBy] }</h3>${seg("spendBy",[["category","Category"],["vendor","Vendor"],["phase","Phase"]])}</div>
     <div class="bars ${ui.spendBy==="phase"?"phasebars":""}">${rows.map(r=>{ const over = r.bud && r.tot > r.bud + 0.004; return `<div class="bar"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
-      <span class="track"><span style="width:${r.paid/max*100}%;background:var(--good)"></span><span style="width:${r.held/max*100}%;background:var(--accent)"></span><span style="width:${r.rest/max*100}%;background:var(--warn);opacity:.55"></span>${r.bud?`<i class="bud" style="left:${(r.bud/max*100).toFixed(2)}%" title="Budget ${money(r.bud)}"></i>`:""}</span>
+      <span class="track"><span style="width:${r.paid/max*100}%;background:var(--good)"></span><span style="width:${r.held/max*100}%;background:var(--held)"></span><span style="width:${r.rest/max*100}%;background:var(--warn);opacity:.55"></span>${r.bud?`<i class="bud" style="left:${(r.bud/max*100).toFixed(2)}%" title="Budget ${money(r.bud)}"></i>`:""}</span>
       <span class="amt" style="${over?"color:var(--bad)":""}">${money(r.tot)}${r.bud?`<small> / ${money(r.bud)}</small>`:""}</span></div>`; }).join("")}</div>
-    <div class="legend" style="margin-top:10px"><span style="--c:var(--good)">Paid</span><span style="--c:var(--accent)">Retainage held</span><span style="--c:var(--warn)">Owed or quoted</span>${ui.spendBy==="phase"&&rows.some(r=>r.bud)?`<span class="budkey">Phase budget</span>`:""}</div>
+    <div class="legend" style="margin-top:10px"><span style="--c:var(--good)">Paid</span><span style="--c:var(--held)">Retainage held</span><span style="--c:var(--warn)">Owed or quoted</span>${ui.spendBy==="phase"&&rows.some(r=>r.bud)?`<span class="budkey">Phase budget</span>`:""}</div>
     ${ui.spendBy==="phase" && !S.phases.some(p=>+p.budget) ? `<p class="hint" style="margin:8px 0 0">Set a budget on each phase (Schedule → Phases → Edit) to compare planned and actual costs here.</p>` : ""}</div>`:""}
   ${S.costs.length ? `
   <div class="toolbar">${seg("costShow",[["all","All"],["owed","Owed"],["paid","Paid"],["held","Retainage"],["quotes","Quotes"]])}<span class="hint num">${list.length} cost${list.length===1?"":"s"} · ${money(sum("amt"))} total · ${money(sum("paid"))} paid</span></div>
@@ -401,10 +405,10 @@ function openCostDetail(id){
     <div class="cd-sum">
       <div><span class="label">Amount</span><b class="num">${money(m.amt)}</b></div>
       <div><span class="label">Paid</span><b class="num" style="color:var(--good)">${money(m.paid)}</b></div>
-      ${(m.pct||m.held) ? `<div><span class="label">Retainage held${m.pct?` (${m.pct}%)`:""}</span><b class="num" style="color:var(--accent)">${money(m.held)}</b></div>` : ""}
+      ${(m.pct||m.held) ? `<div><span class="label">Retainage held${m.pct?` (${m.pct}%)`:""}</span><b class="num" style="color:var(--held)">${money(m.held)}</b></div>` : ""}
       <div><span class="label">Still owed</span><b class="num">${money(m.balance)}</b></div>
     </div>
-    ${m.amt ? `<div class="meter" style="margin:4px 0 2px"><div class="paid" style="width:${Math.min(100,m.paid/m.amt*100)}%"></div><div style="width:${Math.min(100,m.held/m.amt*100)}%;background:var(--accent)"></div></div>` : ""}
+    ${m.amt ? `<div class="meter" style="margin:4px 0 2px"><div class="paid" style="width:${Math.min(100,m.paid/m.amt*100)}%"></div><div style="width:${Math.min(100,m.held/m.amt*100)}%;background:var(--held)"></div></div>` : ""}
     ${c.due && m.balance>m.held ? `<p class="hint" style="margin:6px 0 0">Next payment due ${fmtDate(c.due)}</p>` : ""}
 
     <h4 class="cd-h">Payments</h4>
@@ -737,14 +741,14 @@ function vDraws(){
   <div class="viewhead"><h2>Loan draws</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn write" data-act="project">${loan?"Edit loan details":"Set loan amount"}</button><button class="btn primary write" data-act="add" data-kind="draws">Add draw</button></div></div>
   <div class="tiles">
     <div class="tile"><div class="label">Construction loan</div><div class="v num">${loan?money(loan):"—"}</div><div class="hint">${esc(S.project.lender||"Lender not set")}</div></div>
-    <div class="tile" style="border-top-color:var(--good)"><div class="label">Funded</div><div class="v num">${money(funded)}</div><div class="hint">${loan?Math.round(funded/loan*100)+"% of loan":""}</div></div>
-    <div class="tile" style="border-top-color:var(--accent)"><div class="label">Spent from draws</div><div class="v num">${money(f.loan)}</div><div class="hint">Payments made with loan money</div></div>
-    <div class="tile" style="border-top-color:${onHand<0?"var(--bad)":"var(--warn)"}"><div class="label">Loan money on hand</div><div class="v num" style="color:${onHand<0?"var(--bad)":"inherit"}">${money(onHand)}</div><div class="hint">${onHand<0?"More paid than funded":"Funded but not spent yet"}</div></div>
-    <div class="tile" style="border-top-color:var(--line)"><div class="label">Requested, waiting</div><div class="v num">${money(waiting.reduce((a,d)=>a+(+d.amount||0),0))}</div><div class="hint">${waiting.length} draw${waiting.length===1?"":"s"}</div></div>
-    <div class="tile" style="border-top-color:var(--line)"><div class="label">Left to draw</div><div class="v num">${loan?money(loan-funded):"—"}</div><div class="hint">${loan && scheduled && Math.abs(scheduled-loan)>0.5 ? `Draws listed total ${money(scheduled)}` : ""}</div></div>
+    <div class="tile"><div class="label">Funded</div><div class="v num">${money(funded)}</div><div class="hint">${loan?Math.round(funded/loan*100)+"% of loan":""}</div></div>
+    <div class="tile"><div class="label">Spent from draws</div><div class="v num">${money(f.loan)}</div><div class="hint">Payments made with loan money</div></div>
+    <div class="tile"><div class="label">Loan money on hand</div><div class="v num" style="color:${onHand<0?"var(--bad)":"inherit"}">${money(onHand)}</div><div class="hint">${onHand<0?"More paid than funded":"Funded but not spent yet"}</div></div>
+    <div class="tile"><div class="label">Requested, waiting</div><div class="v num">${money(waiting.reduce((a,d)=>a+(+d.amount||0),0))}</div><div class="hint">${waiting.length} draw${waiting.length===1?"":"s"}</div></div>
+    <div class="tile"><div class="label">Left to draw</div><div class="v num">${loan?money(loan-funded):"—"}</div><div class="hint">${loan && scheduled && Math.abs(scheduled-loan)>0.5 ? `Draws listed total ${money(scheduled)}` : ""}</div></div>
   </div>
-  ${loan?`<div class="meter" style="margin:0 0 6px"><div style="width:${Math.min(100,f.loan/loan*100)}%;background:var(--accent)"></div><div class="paid" style="width:${Math.max(0,Math.min(100,(funded-f.loan)/loan*100))}%"></div><div class="est" style="width:${Math.min(100,waiting.reduce((a,d)=>a+(+d.amount||0),0)/loan*100)}%"></div></div>
-    <div class="legend" style="margin-bottom:16px"><span style="--c:var(--accent)">Spent</span><span style="--c:var(--good)">Funded, on hand</span><span style="--c:var(--warn)">Requested</span></div>`:""}
+  ${loan?`<div class="meter" style="margin:0 0 6px"><div style="width:${Math.min(100,f.loan/loan*100)}%;background:var(--loan)"></div><div class="paid" style="width:${Math.max(0,Math.min(100,(funded-f.loan)/loan*100))}%"></div><div class="est" style="width:${Math.min(100,waiting.reduce((a,d)=>a+(+d.amount||0),0)/loan*100)}%"></div></div>
+    <div class="legend" style="margin-bottom:16px"><span style="--c:var(--loan)">Spent</span><span style="--c:var(--good)">Funded, on hand</span><span style="--c:var(--warn)">Requested</span></div>`:""}
   ${f.own ? `<p class="hint" style="margin:-4px 0 14px">Your own money paid so far: <b class="num" style="color:var(--ink)">${money(f.own)}</b>.</p>` : ""}
   <div class="panel" style="padding-block:2px"><div class="rows">
     ${S.draws.length ? S.draws.map(d=>{ const amt = +d.amount||0, spent = sp[d.id].spent, left = amt - spent;
@@ -753,7 +757,7 @@ function vDraws(){
       return `<div class="row"><div style="min-width:0">
         <div class="t">${esc(drawLabel(d))}</div>
         <div class="meta">${ph?`<span>Covers ${esc(ph.title)}</span>`:""}${d.targetDate?`<span>Expected ${fmtDate(d.targetDate)}</span>`:""}${d.requestedDate?`<span>Requested ${fmtDate(d.requestedDate)}</span>`:""}${d.fundedDate?`<span>Funded ${fmtDate(d.fundedDate)}</span>`:""}</div>
-        ${amt||spent ? `<div class="drawuse"><div class="meter"><div style="width:${amt?Math.min(100,spent/amt*100):100}%;background:${spent>amt+0.004?"var(--bad)":"var(--accent)"}"></div></div>
+        ${amt||spent ? `<div class="drawuse"><div class="meter"><div style="width:${amt?Math.min(100,spent/amt*100):100}%;background:${spent>amt+0.004?"var(--bad)":"var(--loan)"}"></div></div>
           <div class="hint num">${money(spent)} spent of ${money(amt)} · ${left>=0?`${money(left)} left`:`${money(-left)} over`} · ${sp[d.id].items.length} payment${sp[d.id].items.length===1?"":"s"}</div></div>` : ""}
         ${warn ? `<div style="margin-top:6px">${warn}</div>` : ""}
         ${d.notes?`<div class="txt">${esc(d.notes)}</div>`:""}
@@ -790,7 +794,7 @@ function openDrawPacket(id){
       <span class="pill ${DRAW_CLASS[d.status]||""}">${DRAW_ST[d.status]||"Upcoming"}</span></div>
     <div class="cd-sum">
       <div><span class="label">Draw amount</span><b class="num">${money(amt)}</b></div>
-      <div><span class="label">Spent from it</span><b class="num" style="color:var(--accent)">${money(sp.spent)}</b></div>
+      <div><span class="label">Spent from it</span><b class="num" style="color:var(--loan)">${money(sp.spent)}</b></div>
       <div><span class="label">${amt-sp.spent>=0?"Left":"Over"}</span><b class="num" style="color:${amt-sp.spent<0?"var(--bad)":"inherit"}">${money(Math.abs(amt-sp.spent))}</b></div>
     </div>
     ${ph ? `<h4 class="cd-h">Milestone: ${esc(ph.title)}</h4><p class="hint" style="margin:0">${esc(STATUS[ph.status]||"Not started")}${ph.inspection?` · ${esc(ph.inspection)} inspection: ${esc(INSP[ph.inspectionStatus||"none"])}${ph.inspectionDate?` ${fmtDate(ph.inspectionDate)}`:""}`:""}</p>` : ""}
@@ -902,7 +906,7 @@ function vVendors(){
         </div>
       </div><div class="side">
         ${v.n ? `<span class="amt">${money(v.paid)}</span><span class="hint">paid</span>
-        ${v.held?`<span class="amt" style="color:var(--accent)">${money(v.held)}</span><span class="hint">retainage held</span>`:""}
+        ${v.held?`<span class="amt" style="color:var(--held)">${money(v.held)}</span><span class="hint">retainage held</span>`:""}
         ${v.owed>0.004?`<span class="amt" style="color:var(--warn)">${money(v.owed)}</span><span class="hint">owed or quoted</span>`:""}` : `<span class="hint">No costs yet</span>`}
       </div></div>`; }).join("")
     : `<p class="empty" style="padding:14px 0">${ui.vendTrade!=="all" ? "No vendors in this trade." : "No vendors yet. Tap Add vendor to save a contractor's contact details, license and insurance, or add costs with a vendor name and they'll show up here."}</p>`}

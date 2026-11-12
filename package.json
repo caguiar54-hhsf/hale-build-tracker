@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.1.1",
+    "@fontsource/ibm-plex-sans": "^5.1.1",
     "@supabase/supabase-js": "2.49.4"
   },
   "devDependencies": {

@@ -3,7 +3,7 @@
   "short_name": "Hale Build",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#F3F6F9",
-  "theme_color": "#0F2A47",
+  "background_color": "#F3F4F6",
+  "theme_color": "#1B2530",
   "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
 }
