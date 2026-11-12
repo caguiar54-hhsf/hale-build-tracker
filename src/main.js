@@ -4,6 +4,8 @@ import "@fontsource/ibm-plex-sans/600.css";
 import "@fontsource/ibm-plex-mono/400.css";
 import "./style.css";
 import { supabase } from "./supabase.js";
+import { icon } from "./icons.js";
+import { stackedColumns, lines, monthRange, monthLabel, setMoneyFormat } from "./charts.js";
 
 const $ = s => document.querySelector(s);
 /* IBM Plex draws the ʻokina (U+02BB) with wide spacing; show the tighter ‘ instead. Stored text is unchanged. */
@@ -182,10 +184,112 @@ function render(){
   lastSub[g] = v;
   document.querySelectorAll("#tabs a").forEach(a => { const ag = a.dataset.g; a.setAttribute("href", "#"+(lastSub[ag] || GROUPS[ag].views[0][0])); a.setAttribute("aria-current", ag===g ? "page" : "false"); });
   const subs = GROUPS[g].views;
-  const subnav = subs.length>1 ? `<nav class="sub" aria-label="Sections">${subs.map(([sv,sl])=>{ const c=subCount(sv); return `<a href="#${sv}" aria-current="${sv===v?"page":"false"}">${sl}${c?`<span class="ct">${c}</span>`:""}</a>`; }).join("")}</nav>` : "";
+  const subnav = subs.length>1 ? `<nav class="sub" aria-label="Sections">${subs.map(([sv,sl])=>{ const c=subCount(sv); return `<a href="#${sv}" aria-current="${sv===v?"page":"false"}">${icon(SUB_IC[sv])}${sl}${c?`<span class="ct">${c}</span>`:""}</a>`; }).join("")}</nav>` : "";
+  chartSpecs = {};
   $("#view").innerHTML = subnav + VIEW_FN()[v]();
   if(v==="log") fillAuthors();
+  drawCharts();
 }
+const SUB_IC = {phases:"list", timeline:"calendarClock", budget:"receipt", changes:"swap", draws:"landmark", vendors:"building",
+  log:"notebook", punch:"clipboard", questions:"help", documents:"file", warranties:"shield", contacts:"users", sharing:"userPlus"};
+
+/* ---------- charts ---------- */
+let chartSpecs = {};
+function drawCharts(){
+  setMoneyFormat(money);
+  document.querySelectorAll("#view .chart[data-chart]").forEach(el => {
+    const s = chartSpecs[el.dataset.chart]; if(!s || !el.clientWidth) return;
+    try { (s.type==="columns" ? stackedColumns : lines)(el, s); } catch(e){ console.warn("chart", e); }
+  });
+}
+let chartResize = null, chartW = window.innerWidth;
+window.addEventListener("resize", () => { if(window.innerWidth===chartW) return; chartW = window.innerWidth; clearTimeout(chartResize); chartResize = setTimeout(drawCharts, 120); });
+const ymOf = d => /^\d{4}-\d{2}/.test(d||"") ? String(d).slice(0,7) : "";
+const prevYM = k => { let [y,m] = k.split("-").map(Number); m--; if(m<1){ m=12; y--; } return `${y}-${String(m).padStart(2,"0")}`; };
+const SRC_SERIES = [{key:"loan", label:"Construction loan", cls:"s-loan", c:"var(--c-loan)"}, {key:"own", label:"Own money", cls:"s-own", c:"var(--c-own)"}, {key:"unset", label:"Not specified", cls:"s-unset", c:"var(--c-unset)"}];
+/* Cash paid per month (payments and retainage releases), split by where the money came from */
+function monthlyPaid(){
+  const by = {}; let undated = 0, nUndated = 0;
+  S.costs.forEach(c => payList(c).forEach(p => { const a = +p.amount||0; if(!a) return; const k = ymOf(p.date);
+    if(!k){ undated += a; nUndated++; return; }
+    const t = srcOf(p).type; const key = t==="draw"||t==="loan" ? "loan" : t==="own" ? "own" : "unset";
+    (by[k] ||= {loan:0, own:0, unset:0})[key] += a; }));
+  const months = monthRange(Object.keys(by), ymOf(today()));
+  const rows = months.map(m => ({month:m, values: by[m] || {loan:0, own:0, unset:0}}));
+  return {months, rows, undated, nUndated};
+}
+/* Running total, starting from zero the month before the first payment */
+function cumulative(months, perMonth){
+  if(!months.length) return {months:[], values:[]};
+  const ms = [prevYM(months[0]), ...months]; let run = 0;
+  return {months: ms, values: ms.map((m,i) => i===0 ? 0 : (run += perMonth(m)))};
+}
+const chartBox = (key, label) => `<div class="chart" data-chart="${key}" tabindex="0" aria-label="${esc(label)}. Use the arrow keys to step through months."></div>`;
+const chartLegend = series => series.length > 1 ? `<div class="legend chart-legend">${series.map(s=>`<span style="--c:${s.c}">${esc(s.label)}</span>`).join("")}</div>` : "";
+function chartTable(head, rows){
+  return `<details class="charttable"><summary>Show as table</summary><div class="tablebox"><table><thead><tr>${head.map(h=>`<th>${esc(h)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r=>`<tr>${r.map((x,i)=>`<td>${i===0?esc(x):money(x)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
+}
+function spendingCharts(){
+  const mp = monthlyPaid(); if(!mp.months.length) return "";
+  const t = totals();
+  const used = SRC_SERIES.filter(s => s.key!=="unset" || mp.rows.some(r=>r.values.unset));
+  chartSpecs.spendMonthly = {type:"columns", series:used, rows:mp.rows, label:"Cash paid each month, split by construction loan and own money"};
+  const cum = cumulative(mp.months, m => { const r = mp.rows.find(x=>x.month===m); return r ? r.values.loan+r.values.own+r.values.unset : 0; });
+  chartSpecs.spendTotal = {type:"lines", months:cum.months, series:[{label:"Paid to date", cls:"s-total", values:cum.values, area:true}],
+    refs: t.budget ? [{value:t.budget, label:"Budget"}] : [], label:"Total paid to date"+(t.budget?" compared with the budget":"")};
+  const note = mp.nUndated ? `<p class="hint chart-note">${mp.nUndated} payment${mp.nUndated>1?"s":""} without a date (${money(mp.undated)}) ${mp.nUndated>1?"aren't":"isn't"} shown.</p>` : "";
+  return `<div class="chartgrid">
+    <div class="panel"><h3><span class="hi">${icon("chart")}Spending by month</span></h3>${chartBox("spendMonthly","Spending by month")}${chartLegend(used)}
+      ${chartTable(["Month", ...used.map(s=>s.label), "Total"], mp.rows.map(r=>[monthLabel(r.month,true), ...used.map(s=>r.values[s.key]), used.reduce((a,s)=>a+r.values[s.key],0)]).reverse())}${note}</div>
+    <div class="panel"><h3><span class="hi">${icon("chartLine")}Total paid to date</span></h3>${chartBox("spendTotal","Total paid to date")}
+      ${t.budget ? `<div class="legend chart-legend"><span style="--c:var(--c-total)">Paid to date</span><span class="budkey" style="--c:var(--muted)">Budget ${money(t.budget)} (dashed)</span></div>` : `<p class="hint chart-note">Set a total budget in project details to see it on this chart.</p>`}
+      ${chartTable(["Month","Paid to date"], cum.months.slice(1).map((m,i)=>[monthLabel(m,true), cum.values[i+1]]).reverse())}</div>
+  </div>`;
+}
+function drawChart(){
+  const loan = +S.project.loanAmount || 0;
+  const fundedBy = {}, spentBy = {};
+  S.draws.forEach(d => { if(d.status==="funded"){ const k = ymOf(d.fundedDate) || ymOf(d.requestedDate); if(k) fundedBy[k] = (fundedBy[k]||0) + (+d.amount||0); } });
+  S.costs.forEach(c => payList(c).forEach(p => { const t = srcOf(p).type; const k = ymOf(p.date); if((t==="draw"||t==="loan") && k) spentBy[k] = (spentBy[k]||0) + (+p.amount||0); }));
+  const months = monthRange([...Object.keys(fundedBy), ...Object.keys(spentBy)], ymOf(today()));
+  if(!months.length) return "";
+  const f = cumulative(months, m => fundedBy[m]||0), s = cumulative(months, m => spentBy[m]||0);
+  const series = [{label:"Funded by the lender", cls:"s-unset", values:f.values, step:true, c:"var(--c-unset)"}, {label:"Spent from the loan", cls:"s-loan", values:s.values, area:true, c:"var(--c-loan)"}];
+  chartSpecs.drawsLine = {type:"lines", months:f.months, series, refs: loan ? [{value:loan, label:"Loan"}] : [], label:"Loan money funded compared with loan money spent, over time"};
+  return `<div class="panel" style="margin-bottom:16px"><h3><span class="hi">${icon("chartLine")}Funded vs. spent over time</span></h3>${chartBox("drawsLine","Loan funded versus spent")}
+    <div class="legend chart-legend">${series.map(x=>`<span style="--c:${x.c}">${esc(x.label)}</span>`).join("")}${loan?`<span class="budkey">Loan ${money(loan)} (dashed)</span>`:""}</div>
+    <p class="hint chart-note">The gap between the lines is loan money on hand. If the indigo line goes above the gray one, payments were made before the draw came in.</p>
+    ${chartTable(["Month","Funded","Spent"], f.months.slice(1).map((m,i)=>[monthLabel(m,true), f.values[i+1], s.values[i+1]]).reverse())}</div>`;
+}
+function homeChart(){
+  const mp = monthlyPaid(); if(!mp.months.length) return "";
+  const t = totals();
+  const cum = cumulative(mp.months, m => { const r = mp.rows.find(x=>x.month===m); return r ? r.values.loan+r.values.own+r.values.unset : 0; });
+  chartSpecs.homeTotal = {type:"lines", height:150, months:cum.months, series:[{label:"Paid to date", cls:"s-total", values:cum.values, area:true}],
+    refs: t.budget ? [{value:t.budget, label:"Budget"}] : [], label:"Total paid to date"};
+  return `<div style="margin-top:14px">${chartBox("homeTotal","Total paid to date")}</div>`;
+}
+
+/* ---------- icons on buttons (added after every render, and when sheets open) ---------- */
+const BTN_IC = {add:"plus", addCost:"plus", addSel:"plus", addPhase:"plus", addContact:"plus", exportCosts:"download", exportPayments:"download",
+  allowances:"sliders", template:"layers", project:"pencil", editCost:"pencil", purchase:"cart", drawPacket:"file", toBudget:"wallet", coToBudget:"wallet"};
+function decorate(root){
+  root.querySelectorAll(".btn[data-act]:not([data-ic]), .iconbtn[data-act]:not([data-ic])").forEach(b => {
+    b.dataset.ic = "1";
+    let n = BTN_IC[b.dataset.act];
+    if(b.classList.contains("iconbtn") && !["purchase","drawPacket","toBudget","coToBudget"].includes(b.dataset.act)) n = b.dataset.act==="costDetail" && /payment/i.test(b.textContent) ? "receipt" : null;
+    if(n) b.insertAdjacentHTML("afterbegin", icon(n));
+  });
+  root.querySelectorAll(".upl-inline:not([data-ic])").forEach(b => { b.dataset.ic = "1"; b.insertAdjacentHTML("afterbegin", icon("clip")); });
+}
+let decoTimer = null;
+new MutationObserver(() => { clearTimeout(decoTimer); decoTimer = setTimeout(() => { decorate($("#view")); decorate($("#scrim")); }, 0); })
+  .observe(document.body, { childList:true, subtree:true });
+{ const s = $("#editProject")?.querySelector("svg"); if(s) s.outerHTML = icon("pencil"); }
+document.querySelectorAll("#tabs a").forEach(a => { const s = a.querySelector("svg"); if(s) s.outerHTML = icon(a.dataset.g, ""); });
+(() => { const m = $("#acctMenu"); if(!m) return;
+  [["a[href='#sharing']","users"],["#menuSwitch","swap"],["[data-signout]","logout"]].forEach(([q,n]) => { const e = m.querySelector(q); if(e) e.insertAdjacentHTML("afterbegin", icon(n)); }); })();
 window.addEventListener("hashchange", () => { render(); window.scrollTo(0,0); });
 
 /* upcoming dated events across the whole build */
@@ -246,26 +350,27 @@ function vOverview(){
       </dl>
     </div>
     <div class="panel">
-      <h3>Coming up in the next 2 weeks</h3>
+      <h3><span class="hi">${icon("calendarClock")}Coming up in the next 2 weeks</span></h3>
       ${coming.length ? `<ul class="plain">${coming.slice(0,6).map(e=>`<li><span class="date">${fmtDate(e.date).replace(/, \d{4}$/,"")}</span><span style="min-width:0"><span class="k label">${esc(e.kind)}</span> ${esc(e.text)}</span></li>`).join("")}</ul>
         ${coming.length>6?`<a class="ext" href="#timeline">See all ${coming.length} on the timeline</a>`:""}`
         : `<p class="empty">Nothing dated in the next two weeks. Inspections, order-by dates, payment due dates and draws show up here once they have dates.</p>`}
     </div>
     <div class="panel">
-      <h3>Budget</h3>
+      <h3><span class="hi">${icon("wallet")}Budget</span></h3>
       ${t.budget ? `<div class="meter"><div class="paid" style="width:${pct(t.paid)}%"></div><div class="est" style="width:${pct(t.est)}%"></div></div>
       <div class="legend"><span style="--c:var(--good)">Paid ${money(t.paid)}</span><span style="--c:var(--warn)">Owed or quoted ${money(t.est)}</span><span style="--c:var(--line)">Unallocated ${money(Math.max(0,t.left))}</span></div>
       ${t.left<0 ? `<p style="color:var(--bad);font-weight:600;margin:10px 0 0">Over budget by ${money(-t.left)} including quotes.</p>`:""}`
       : `<p class="empty">Paid so far: ${money(t.paid)}. Add a total budget in project details to track what's left.</p>`}
       ${(+p.loanAmount || S.draws.length) ? (()=>{ const f=S.draws.filter(d=>d.status==="funded").reduce((a,d)=>a+(+d.amount||0),0); return `<p style="margin:12px 0 0;font-size:.9rem">Loan draws funded: <b class="num">${money(f)}</b>${+p.loanAmount?` of <b class="num">${money(p.loanAmount)}</b>`:""}</p>`; })() : ""}
+      ${homeChart()}
     </div>
     <div class="panel">
-      <h3>Needs attention</h3>
-      ${attention.length ? `<ul class="plain">${attention.map(([txt,v])=>`<li><a class="ext" href="#${v}" style="font-size:.93rem">${esc(txt)}</a></li>`).join("")}</ul>`
+      <h3><span class="hi">${icon("alert")}Needs attention</span></h3>
+      ${attention.length ? `<ul class="plain attn">${attention.map(([txt,v])=>`<li><a class="ext" href="#${v}" style="font-size:.93rem">${icon(SUB_IC[v]||"alert")}<span>${esc(txt)}</span></a></li>`).join("")}</ul>`
         : `<p class="empty">All clear. Open questions, pending change orders, punch items and orders due soon will show up here.</p>`}
     </div>
     <div class="panel full">
-      <h3>Latest from the site</h3>
+      <h3><span class="hi">${icon("hammer")}Latest from the site</span></h3>
       ${S.log.length ? `<ul class="plain">${S.log.slice(0,4).map(l=>`<li><span class="date">${fmtDate(l.date)}</span><span style="min-width:0;overflow-wrap:anywhere">${esc(trunc(l.text,140))}</span></li>`).join("")}</ul>`
         : `<p class="empty">No site notes yet. Add one from the Site log tab after each visit.</p>`}
     </div>
@@ -371,6 +476,7 @@ function vBudget(){
       <div class="meter fund"><div style="width:${w(f.loan)}%;background:var(--loan)"></div><div style="width:${w(f.own)}%;background:var(--good)"></div><div style="width:${w(f.unset)}%;background:var(--line)"></div></div>
       <div class="legend num"><span style="--c:var(--loan)">Construction loan ${money(f.loan)}</span><span style="--c:var(--good)">Own money ${money(f.own)}</span>${f.unset?`<span style="--c:var(--line)">Not specified ${money(f.unset)}</span>`:""}</div>
       ${f.nUnset ? `<p class="hint" style="margin:8px 0 0">${f.nUnset} payment${f.nUnset>1?"s don't":" doesn't"} say where the money came from. Open the cost and pick the source under Payments.</p>` : ""}</div>`; })()}
+  ${spendingCharts()}
   ${rows.length ? `<div class="panel" style="margin-bottom:16px">
     <div class="toolbar" style="margin-bottom:12px"><h3 style="margin:0">Spending by ${ {phase:"phase",category:"category",vendor:"vendor"}[ui.spendBy] }</h3>${seg("spendBy",[["category","Category"],["vendor","Vendor"],["phase","Phase"]])}</div>
     <div class="bars ${ui.spendBy==="phase"?"phasebars":""}">${rows.map(r=>{ const over = r.bud && r.tot > r.bud + 0.004; return `<div class="bar"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
@@ -641,7 +747,7 @@ function vSelections(){
     const inBudget = s.costId && costIds.has(s.costId);
     return `<article class="sel">
       ${ph.length ? `<button class="ph" data-act="photo" data-coll="selections" data-id="${esc(s.id)}" aria-label="View photos of ${esc(s.item)}"><img src="${blob(ph[0])}" data-path="${esc(ph[0])}" alt="" loading="lazy">${ph.length>1?`<span class="count">${ph.length} photos</span>`:""}</button>`
-        : `<div class="ph none"><span class="ct">${esc(s.category||"No photo")}</span></div>`}
+        : `<div class="ph none"><span class="ct"><span class="phic">${icon(s.category||"Other","")||icon("Other","")}</span>${esc(s.category||"No photo")}</span></div>`}
       <div class="bd">
         <div class="hd"><span class="nm">${esc(s.item)}</span><span class="pill ${SEL_CLASS[s.status]??""}">${SEL_ST[s.status]||"Considering"}</span></div>
         <div class="sub selph">${phaseOf(s) ? esc(phaseOf(s).title) : `<span style="color:var(--bad)">No phase yet</span>`}${selFilter.group==="phase" && s.room ? ` · ${esc(s.room)}` : ""}</div>
@@ -959,6 +1065,7 @@ function vDraws(){
   </div>
   ${loan?`<div class="meter" style="margin:0 0 6px"><div style="width:${Math.min(100,f.loan/loan*100)}%;background:var(--loan)"></div><div class="paid" style="width:${Math.max(0,Math.min(100,(funded-f.loan)/loan*100))}%"></div><div class="est" style="width:${Math.min(100,waiting.reduce((a,d)=>a+(+d.amount||0),0)/loan*100)}%"></div></div>
     <div class="legend" style="margin-bottom:16px"><span style="--c:var(--loan)">Spent</span><span style="--c:var(--good)">Funded, on hand</span><span style="--c:var(--warn)">Requested</span></div>`:""}
+  ${drawChart()}
   ${f.own ? `<p class="hint" style="margin:-4px 0 14px">Your own money paid so far: <b class="num" style="color:var(--ink)">${money(f.own)}</b>.</p>` : ""}
   <div class="panel" style="padding-block:2px"><div class="rows">
     ${S.draws.length ? S.draws.map(d=>{ const amt = +d.amount||0, spent = sp[d.id].spent, left = amt - spent;
