@@ -6,8 +6,10 @@ import "./style.css";
 import { supabase } from "./supabase.js";
 
 const $ = s => document.querySelector(s);
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const money = n => (Number(n)||0).toLocaleString("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
+/* IBM Plex draws the ʻokina (U+02BB) with wide spacing; show the tighter ‘ instead. Stored text is unchanged. */
+const okina = t => t.replace(/\u02BB/g, "\u2018");
+const esc = s => okina(String(s ?? "")).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = n => { n = Number(n)||0; const cents = Math.abs(Math.round(n*100)) % 100 !== 0; return n.toLocaleString("en-US",{style:"currency",currency:"USD",minimumFractionDigits:cents?2:0,maximumFractionDigits:cents?2:0}); };
 const fmtDate = d => { if(!d) return ""; const t = new Date(d+"T12:00:00"); return isNaN(t) ? d : t.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); };
 const today = () => { const t=new Date(); t.setMinutes(t.getMinutes()-t.getTimezoneOffset()); return t.toISOString().slice(0,10); };
 
@@ -140,8 +142,8 @@ function daysTo(d){ if(!d) return null; return Math.round((new Date(d+"T12:00:00
 /* ---------- header ---------- */
 function renderHeader(){
   const p = S.project;
-  $("#pname").textContent = p.name || "House build";
-  $("#paddr").textContent = [p.address || "Hilo, Hawaiʻi", p.sqft ? Number(p.sqft).toLocaleString()+" sq ft" : ""].filter(Boolean).join(" · ");
+  $("#pname").textContent = okina(p.name || "House build");
+  $("#paddr").textContent = okina([p.address || "Hilo, Hawaiʻi", p.sqft ? Number(p.sqft).toLocaleString()+" sq ft" : ""].filter(Boolean).join(" · "));
   const done = S.phases.filter(x=>x.status==="done").length, tot = S.phases.length;
   const t = totals(), dd = daysTo(p.targetDate);
   const v = [];
@@ -160,12 +162,12 @@ const GROUPS = {
   money:{views:[["budget","Budget"],["changes","Change orders"],["draws","Loan draws"],["vendors","Vendors"]]},
   selections:{views:[["selections","Selections"]]},
   site:{views:[["log","Site log"],["punch","Punch list"],["questions","Questions"]]},
-  files:{views:[["documents","Documents"],["contacts","Contacts"],["sharing","Sharing"]]},
+  files:{views:[["documents","Documents"],["warranties","Warranties"],["contacts","Contacts"],["sharing","Sharing"]]},
 };
 const VIEW_GROUP = {}; Object.entries(GROUPS).forEach(([g,o])=>o.views.forEach(([v])=>VIEW_GROUP[v]=g));
 const lastSub = {};
 const VIEW_FN = () => ({overview:vOverview, phases:vPhases, timeline:vTimeline, budget:vBudget, changes:vChanges, draws:vDraws, vendors:vVendors,
-  selections:vSelections, log:vLog, punch:vPunch, questions:vQuestions, documents:vDocuments, contacts:vContacts, sharing:vSharing});
+  selections:vSelections, log:vLog, punch:vPunch, questions:vQuestions, documents:vDocuments, contacts:vContacts, sharing:vSharing, warranties:vWarranties});
 function currentView(){ const h = location.hash.slice(1); return VIEW_GROUP[h] ? h : "overview"; }
 function subCount(v){
   if(v==="changes") return S.changes.filter(c=>c.status==="proposed").length;
@@ -195,7 +197,8 @@ function events(){
     if(p.end) ev.push({date:p.end, kind:"Finish", text:p.title, view:"phases", done:p.status==="done"});
     if(p.inspectionDate && p.inspectionStatus!=="none") ev.push({date:p.inspectionDate, kind:"Inspection", text:(p.inspection||"Inspection")+" · "+p.title, view:"phases", done:p.inspectionStatus==="passed", flag:p.inspectionStatus==="scheduled"});
   });
-  S.selections.forEach(s=>{ if(s.orderBy && !["ordered","delivered","installed"].includes(s.status)) ev.push({date:s.orderBy, kind:"Order by", text:s.item+(s.room?` · ${s.room}`:""), view:"selections", flag:true}); });
+  S.selections.forEach(s=>{ if(s.orderBy && !["ordered","delivered","installed"].includes(s.status)) ev.push({date:s.orderBy, kind:"Order by", text:s.item+(s.room?` · ${s.room}`:""), view:"selections", flag:true});
+    if(s.status==="ordered" && s.deliveryDate) ev.push({date:s.deliveryDate, kind:"Delivery", text:s.item+(s.purchase?.vendor?` · ${s.purchase.vendor}`:""), view:"selections"}); });
   S.draws.forEach(d=>{
     if(d.targetDate && d.status==="upcoming") ev.push({date:d.targetDate, kind:"Draw", text:`Draw ${d.number??""}: ${d.milestone||""}`, view:"draws"});
     if(d.requestedDate && d.status!=="upcoming") ev.push({date:d.requestedDate, kind:"Draw requested", text:`Draw ${d.number??""}: ${d.milestone||""}`, view:"draws", done:d.status==="funded"});
@@ -222,6 +225,7 @@ function vOverview(){
     else if(dsp[d.id].spent > 0 && d.status!=="funded") attention.push([`${drawLabel(d)}: payments recorded before the draw is funded`,"draws"]); });
   const pmA = phaseMoney(); S.phases.forEach(p => { const over = pmA[p.id].committed - (+p.budget||0); if(+p.budget && over > 0.004) attention.push([`${p.title} is ${money(over)} over its budget`,"phases"]); });
   const insN = S.vendors.filter(v => { const st = insState(v); return st && st[0]==="failed"; }).length; if(insN) attention.push([`${insN} vendor${insN>1?"s'":"'s"} insurance has expired`,"vendors"]);
+  const wSoon = S.selections.filter(x=>x.purchase && x.warrantyExp && daysTo(x.warrantyExp)>=0 && daysTo(x.warrantyExp)<=30).length; if(wSoon) attention.push([`${wSoon} warrant${wSoon>1?"ies end":"y ends"} in the next 30 days`,"warranties"]);
   const fs = fundingSplit(); if(fs.nUnset && S.draws.length) attention.push([`${fs.nUnset} payment${fs.nUnset>1?"s don't":" doesn't"} say if it came from the loan or your own money`,"budget"]);
   const nP = S.punch.filter(p=>p.status==="open").length; if(nP) attention.push([`${nP} open punch list item${nP>1?"s":""}`,"punch"]);
   const failed = S.phases.filter(p=>p.inspectionStatus==="failed").length; if(failed) attention.push([`${failed} failed inspection${failed>1?"s":""} to re-schedule`,"phases"]);
@@ -600,11 +604,15 @@ function vSelections(){
         ${s.vendor ? `<div class="sub">From ${esc(s.vendor)}</div>`:""}
         <div class="price num">${s.price!==null&&s.price!==undefined&&s.price!=="" ? (qty!==1 ? `${money(s.price)} × ${qty} = <b>${money(selTotal(s))}</b>` : `<b>${money(s.price)}</b>`) : `<span class="empty">No price yet</span>`}</div>
         ${os!==null ? `<div><span class="pill soon">${os<0 ? "Order date passed" : os===0 ? "Order today" : `Order within ${os} day${os===1?"":"s"}`}</span></div>` : s.orderBy && !["ordered","delivered","installed"].includes(s.status) ? `<div class="sub">Order by ${fmtDate(s.orderBy)}${s.leadWeeks?` · ${s.leadWeeks} wk lead time`:""}</div>` : s.leadWeeks ? `<div class="sub">${s.leadWeeks} wk lead time</div>`:""}
+        ${s.purchase ? `<div class="bought"><b class="num">${money(s.purchase.total)}</b> paid ${fmtDate(s.purchase.date)}<br>${esc(srcLabel({source:s.purchase.source}))}${s.purchase.vendor?` · ${esc(s.purchase.vendor)}`:""}</div>
+          ${s.status==="ordered" && s.deliveryDate ? `<div class="sub">Delivery expected ${fmtDate(s.deliveryDate)}</div>` : ""}
+          ${warrantyState(s) ? `<div><span class="pill ${warrantyState(s)[0]}">${esc(warrantyState(s)[1])}</span></div>` : ""}` : ""}
         ${s.notes ? `<div class="sub" style="color:var(--ink)">${esc(trunc(s.notes,120))}</div>`:""}
         <div class="acts">
           ${link ? `<a class="ext" href="${esc(link)}" target="_blank" rel="noopener noreferrer">View product ↗</a>`:""}
           <button class="iconbtn write" data-act="editSel" data-id="${esc(s.id)}">Edit</button>
-          ${inBudget ? `<span class="intag">In budget</span>` : (s.price ? `<button class="iconbtn write" data-act="toBudget" data-id="${esc(s.id)}">Add to budget</button>`:"")}
+          ${s.purchase ? `<button class="iconbtn" data-act="costDetail" data-id="${esc(s.purchase.costId)}">View payment</button>`
+            : `<button class="iconbtn write strong" data-act="purchase" data-id="${esc(s.id)}">Purchase item</button>${inBudget ? `<span class="intag">In budget</span>` : (s.price ? `<button class="iconbtn write" data-act="toBudget" data-id="${esc(s.id)}">Add to budget</button>`:"")}`}
         </div>
       </div>
     </article>`;
@@ -643,6 +651,104 @@ function vSelections(){
   : `<div class="panel"><p class="empty" style="margin:0">Nothing here yet. Add the fixtures and finishes you're looking at: light fixtures, cabinets, faucets, tile, flooring, appliances. Attach photos, note the price and where to buy it, and mark it Chosen once you decide.</p></div>`}`;
 }
 
+const selCostCat = s => s.category==="Appliances"||s.category==="Plumbing fixtures"||s.category==="Lighting" ? "Appliances & fixtures" : "Materials";
+const WARRANTY_TERMS = [["","No warranty / not sure"],["3","90 days"],["12","1 year"],["24","2 years"],["36","3 years"],["60","5 years"],["120","10 years"],["life","Lifetime"]];
+function addMonths(dateStr, m){ const d = new Date((dateStr||today())+"T12:00:00"); d.setMonth(d.getMonth()+m); return d.toISOString().slice(0,10); }
+function warrantyState(s){
+  if(s.warrantyTerm==="life") return ["done","Lifetime warranty"];
+  if(!s.warrantyExp) return null; const d = daysTo(s.warrantyExp);
+  if(d < 0) return ["", `Warranty ended ${fmtDate(s.warrantyExp)}`];
+  if(d <= 30) return ["scheduled", `Warranty ends in ${d} day${d===1?"":"s"}`];
+  return ["done", `Warranty until ${fmtDate(s.warrantyExp)}`];
+}
+function openPurchase(id){
+  const s = S.selections.find(x=>x.id===id); if(!s || readOnly) return;
+  const total0 = selTotal(s);
+  const linked = s.costId && S.costs.find(c=>c.id===s.costId);
+  const lines = S.costs.map(c=>({c, m:costMath(c)})).sort((a,b)=> (b.c.phaseId===s.phaseId) - (a.c.phaseId===s.phaseId) || a.c.item.localeCompare(b.c.item));
+  const lineLabel = ({c,m}) => `${c.item}${c.phaseId===s.phaseId?"":" ("+(S.phases.find(p=>p.id===c.phaseId)?.title||"no phase")+")"} · ${money(m.paid)} of ${money(m.amt)} paid`;
+  const scrim = $("#scrim"); scrim.classList.remove("lbx");
+  scrim.innerHTML = `<form class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" novalidate>
+    <div class="cd-head"><div style="min-width:0"><h3 id="sheetTitle" style="margin-bottom:2px">Purchase: ${esc(s.item)}</h3>
+      <div class="hint">${esc([phaseOf(s)?.title, s.room, s.brand].filter(Boolean).join(" · "))}</div></div></div>
+    <div class="fields">
+      <label class="field" for="puAmt"><span class="label">Amount paid ($) *</span><input id="puAmt" type="number" inputmode="decimal" step="any" value="${total0||""}"></label>
+      <label class="field" for="puExtra"><span class="label">Tax and shipping ($)</span><input id="puExtra" type="number" inputmode="decimal" step="any" placeholder="0"></label>
+      <div class="field full"><span class="label">Total</span><div class="paynow num" id="puTotal">—</div></div>
+      <label class="field" for="puDate"><span class="label">Date purchased</span><input id="puDate" type="date" value="${today()}"></label>
+      <label class="field" for="puVendor"><span class="label">Bought from</span><input id="puVendor" value="${esc(s.vendor||"")}" list="puVendorL"><datalist id="puVendorL">${vendorNames().map(v=>`<option value="${esc(v)}">`).join("")}</datalist></label>
+      <label class="field" for="puSrc"><span class="label">Paid from</span><select id="puSrc">${sourceOptions("own")}</select></label>
+      <label class="field" for="puMethod"><span class="label">Paid by</span><select id="puMethod">${PAY_METHODS.map(x=>`<option ${x==="Credit card"?"selected":""}>${x}</option>`).join("")}</select></label>
+      <label class="field full" for="puLine"><span class="label">Apply to budget line</span><select id="puLine">
+        <option value="new" ${linked?"":"selected"}>New line: ${esc(s.item)}${phaseOf(s)?` (${esc(phaseOf(s).title)})`:""}</option>
+        ${lines.length?`<optgroup label="Existing budget lines">${lines.map(x=>`<option value="${esc(x.c.id)}" ${linked&&x.c.id===s.costId?"selected":""}>${esc(lineLabel(x))}</option>`).join("")}</optgroup>`:""}
+      </select><span class="hint" id="puLineHint"></span></label>
+      <label class="field" for="puRef"><span class="label">Order or receipt no.</span><input id="puRef" placeholder="Optional"></label>
+      <label class="field" for="puStatus"><span class="label">Delivery</span><select id="puStatus"><option value="ordered">Ordered, waiting for delivery</option><option value="delivered">Have it (picked up or delivered)</option><option value="installed">Installed</option></select></label>
+      <label class="field" for="puDeliv"><span class="label">Expected delivery</span><input id="puDeliv" type="date"></label>
+      <label class="field" for="puSerial"><span class="label">Serial or model no.</span><input id="puSerial" value="${esc(s.brand||"")}"></label>
+      <label class="field" for="puWarr"><span class="label">Warranty</span><select id="puWarr">${WARRANTY_TERMS.map(([v,l])=>`<option value="${v}">${l}</option>`).join("")}</select></label>
+      <label class="field" for="puWarrExp"><span class="label">Warranty expires</span><input id="puWarrExp" type="date"></label>
+      <label class="field full" for="puWarrNote"><span class="label">Warranty details</span><input id="puWarrNote" placeholder="e.g. Parts 5 years, labor 1 year. Register within 30 days."></label>
+      <div class="field full"><span class="label">Receipt</span><div class="thumbs" id="puFiles"></div>
+        <label class="btn upl" for="puIn">Add receipt<input type="file" id="puIn" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label>
+        <div class="hint" id="puMsg" aria-live="polite">Photo or PDF of the receipt or order confirmation.</div></div>
+    </div>
+    <div class="err" id="puErr" hidden></div>
+    <div class="foot"><div class="right"><button type="button" class="btn" id="cancelBtn">Cancel</button><button type="submit" class="btn primary">Record purchase</button></div></div>
+  </form>`;
+  scrim.hidden = false;
+  const form = $("#sheet"); let files = [];
+  const amt = $("#puAmt"), extra = $("#puExtra"), date = $("#puDate"), warr = $("#puWarr"), wexp = $("#puWarrExp"), line = $("#puLine"), st = $("#puStatus"), deliv = $("#puDeliv");
+  let wexpTouched = false;
+  const recalc = () => { $("#puTotal").textContent = money((+amt.value||0) + (+extra.value||0));
+    if(!wexpTouched){ wexp.value = /^\d+$/.test(warr.value) ? addMonths(date.value, +warr.value) : ""; }
+    deliv.closest(".field").hidden = st.value!=="ordered";
+    const l = line.value!=="new" && lines.find(x=>x.c.id===line.value);
+    $("#puLineHint").textContent = l ? `The purchase is added as a payment on this line. ${money(Math.max(0,l.m.amt-l.m.paid))} of it is unpaid now.` : "Creates a new cost in the item's phase, already paid.";
+  };
+  [amt, extra, date, warr, line, st].forEach(el => el.addEventListener("input", recalc)); [warr, line, st].forEach(el => el.addEventListener("change", recalc));
+  wexp.addEventListener("input", () => { wexpTouched = true; });
+  recalc();
+  const drawFiles = () => { $("#puFiles").innerHTML = files.map((r,i)=>`<div class="thumb">${/^image\//.test(r.type||"") ? `<img src="${blob(r.id)}" data-path="${esc(r.id)}" alt="">` : `<span class="pdfmark">PDF</span>`}<button type="button" data-frm="${i}" aria-label="Remove">✕</button></div>`).join("");
+    $("#puFiles").querySelectorAll("[data-frm]").forEach(x => x.onclick = () => { files.splice(+x.dataset.frm,1); drawFiles(); }); };
+  $("#puIn").onchange = async () => { const inp = $("#puIn"); const list = [...inp.files]; inp.value = ""; let failed = "";
+    for(const [n,file] of list.entries()){ $("#puMsg").textContent = `Uploading ${n+1} of ${list.length}…`;
+      try { const r = await assets.upload(file); files.push({id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}); drawFiles(); } catch(e){ failed = uploadErr(e, file); } }
+    $("#puMsg").textContent = failed || "Added."; };
+  const close = closeSheet;
+  $("#cancelBtn").onclick = close; scrim.onclick = e => { if(e.target===scrim) close(); }; form.onkeydown = e => { if(e.key==="Escape") close(); };
+  form.onsubmit = async e => { e.preventDefault();
+    const err = t => { $("#puErr").textContent = t; $("#puErr").hidden = false; };
+    const a = +amt.value, x = +extra.value||0;
+    if(!(a>0)) return err("Enter the amount paid.");
+    if(x<0) return err("Tax and shipping can't be negative.");
+    const total = +(a + x).toFixed(2), when = date.value || today(), vendor = $("#puVendor").value.trim(), src = $("#puSrc").value;
+    const btn = form.querySelector("[type=submit]"); btn.disabled = true; btn.textContent = "Saving…";
+    const payment = { id:newId(), kind:"payment", date:when, amount:total, retained:0, source:src, method:$("#puMethod").value, ref:$("#puRef").value.trim(), note:`Purchased: ${s.item}`, by:me||"", selectionId:s.id };
+    let costId, e1;
+    if(line.value==="new"){
+      costId = newId();
+      e1 = await save(`costs/${costId}`, { item: s.item + (s.room?` (${s.room})`:""), vendor, category: selCostCat(s), phaseId: phaseOf(s) ? s.phaseId : "", amount: total, status:"committed", date: when,
+        payments:[payment], receipts: files, notes:"Purchased from Selections", selectionId: s.id, createdAt: new Date().toISOString() });
+    } else {
+      costId = line.value; const cur = S.costs.find(c=>c.id===costId); const {id:_, ...body} = cur;
+      const pays = (Array.isArray(body.payments) && body.payments.length) ? [...body.payments] : payList(cur).map(p=>{ const {legacy, ...q} = p; return {...q, id:newId()}; });
+      e1 = await save(`costs/${costId}`, { ...body, status: body.status==="estimate" ? "committed" : body.status, vendor: body.vendor || vendor, payments:[...pays, payment], receipts:[...(body.receipts||[]), ...files] });
+    }
+    if(e1){ btn.disabled = false; btn.textContent = "Record purchase"; return err(e1); }
+    const {id:_s, ...sb} = S.selections.find(z=>z.id===s.id) || s;
+    const e2 = await save(`selections/${s.id}`, { ...sb, status: st.value, vendor: vendor || sb.vendor || "", costId: sb.costId || costId,
+      purchase: { date:when, amount:a, extra:x, total, vendor, ref:payment.ref, source:src, method:payment.method, costId, paymentId:payment.id },
+      deliveryDate: st.value==="ordered" ? deliv.value : (sb.deliveryDate||""), serial: $("#puSerial").value.trim(),
+      warrantyTerm: warr.value, warrantyExp: warr.value==="life" ? "" : wexp.value, warrantyNote: $("#puWarrNote").value.trim(),
+      receipts: [...(sb.receipts||[]), ...files] });
+    if(e2){ btn.disabled = false; btn.textContent = "Record purchase"; return err(e2); }
+    close();
+  };
+  setTimeout(()=>amt.focus(), 0);
+}
+
 function openLightbox(coll, id, start=0){
   const rec = (S[coll]||[]).find(x=>x.id===id); if(!rec) return;
   const ph = (coll==="documents" ? [rec.file?.id] : (rec.photos||[])).filter(isAsset); if(!ph.length) return;
@@ -671,6 +777,28 @@ const pill = (cls, txt, act, id) => act && !readOnly ? `<button class="pill ${cl
 const seg = (k, opts) => { const cur = k==="selGroup" ? selFilter.group : ui[k]; return `<div class="seg" role="group">${opts.map(([v,l])=>`<button data-act="ui" data-k="${k}" data-v="${v}" aria-pressed="${cur===v}">${l}</button>`).join("")}</div>`; };
 const phaseTitle = id => id ? (S.phases.find(p=>p.id===id)?.title || "") : "";
 const signed = n => (n<0?"−":"+") + money(Math.abs(n));
+
+function vWarranties(){
+  const items = S.selections.filter(s=>s.purchase).sort((a,b)=> (a.warrantyExp||"9999").localeCompare(b.warrantyExp||"9999"));
+  return `
+  <div class="viewhead"><h2>Purchases and warranties</h2></div>
+  <p class="hint" style="margin:-4px 0 14px;max-width:62ch">Everything bought through Selections, with where it came from, serial numbers, receipts and when the warranty ends. Keep this handy after move-in.</p>
+  <div class="panel" style="padding-block:2px"><div class="rows">
+    ${items.length ? items.map(s=>{ const w = warrantyState(s); const rc = (s.receipts||[]).filter(r=>r&&isAsset(r.id));
+      return `<div class="row"><div style="min-width:0">
+        <div class="t">${esc(s.item)}</div>
+        <div class="meta">${[phaseOf(s)?.title, s.room].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join("")}</div>
+        <div class="meta"><span>Bought ${fmtDate(s.purchase.date)}${s.purchase.vendor?` from ${esc(s.purchase.vendor)}`:""}</span>${s.purchase.ref?`<span>Order ${esc(s.purchase.ref)}</span>`:""}${s.serial?`<span class="copyable">Serial/model ${esc(s.serial)}</span>`:""}</div>
+        ${s.warrantyNote?`<div class="txt">${esc(s.warrantyNote)}</div>`:""}
+        ${rc.length?`<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">${rc.map(r=>`<a class="ext" href="${blob(r.id)}" data-fpath="${esc(r.id)}" target="_blank" rel="noopener">${esc(trunc(r.name||"Receipt",32))}</a>`).join("")}</div>`:""}
+      </div><div class="side">
+        ${w?`<span class="pill ${w[0]}">${esc(w[1])}</span>`:`<span class="hint">No warranty recorded</span>`}
+        <span class="amt">${money(s.purchase.total)}</span><span class="hint">${esc(srcLabel({source:s.purchase.source}))}</span>
+        <button class="iconbtn write" data-act="editSel" data-id="${esc(s.id)}">Edit</button>
+      </div></div>`; }).join("")
+    : `<p class="empty" style="padding:14px 0">Nothing purchased yet. In Selections, tap <b>Purchase item</b> on a fixture or finish to record what was paid, where it came from and its warranty.</p>`}
+  </div></div>`;
+}
 
 function vLog(){
   return `
@@ -1041,7 +1169,11 @@ const FORMS = {
     {k:"orderBy",l:"Order by",t:"date"},
     {k:"leadWeeks",l:"Lead time (weeks)",t:"number",ph:"Include shipping to Hilo"},
     {k:"photos",l:"Photos",t:"photos",full:1},
-    {k:"notes",l:"Notes",t:"textarea",full:1,ph:"Dimensions, warranty, why you like it, other options you compared…"}]},
+    {k:"deliveryDate",l:"Delivery date",t:"date",when:d=>!!d.purchase},
+    {k:"serial",l:"Serial or model no.",when:d=>!!d.purchase},
+    {k:"warrantyExp",l:"Warranty expires",t:"date",when:d=>!!d.purchase},
+    {k:"warrantyNote",l:"Warranty details",when:d=>!!d.purchase,ph:"e.g. Register online within 30 days"},
+    {k:"notes",l:"Notes",t:"textarea",full:1,ph:"Dimensions, why you like it, other options you compared…"}]},
   allowances: { title:"Allowances", single:1, path:()=>"meta/allowances", intro:"Enter the allowance for each type from the builder's contract, or your own spending target. Leave blank to skip.",
     fields: CATS.map(c=>({k:c,l:c+" ($)",t:"number"})) },
   project: { title:"Project details", single:1, path:()=>"meta/project", fields:[
@@ -1170,6 +1302,7 @@ function openForm(kind, id, preset){
     questions:{status:"open",date:today()},
     documents:{date:today(),category:ui.docCat!=="all"?ui.docCat:"Other"}}[kind]||{};
   const data = isNew ? defaults : rec;
+  const fields = F.fields.filter(f => !f.when || f.when(data));
   let photos = [...(data.photos||[])].filter(isAsset);
   let fileObj = data.file && isAsset(data.file.id) ? {...data.file} : null;
   let files = (F.fields.find(f=>f.t==="files") ? [...(data[F.fields.find(f=>f.t==="files").k]||[])] : []).filter(r=>r && isAsset(r.id));
@@ -1177,7 +1310,7 @@ function openForm(kind, id, preset){
   scrim.innerHTML = `<form class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" novalidate>
     <h3 id="sheetTitle">${F.single ? F.title : (isNew?"Add ":"Edit ")+F.title.toLowerCase()}</h3>
     ${F.intro ? `<p class="hint" style="margin:-4px 0 14px">${esc(F.intro)}</p>`:""}
-    <div class="fields">${F.fields.map(f=>{
+    <div class="fields">${fields.map(f=>{
       const v = data[f.k] ?? ""; const idA = `f_${kind}_${f.k.replace(/[^a-z0-9]/gi,"_")}`;
       if(f.t==="photos"){
         return `<div class="field full"><span class="label">${esc(f.l)}</span><div class="thumbs" id="thumbs"></div>
@@ -1275,7 +1408,7 @@ function openForm(kind, id, preset){
     e.preventDefault();
     const out = F.single ? {...rec} : (isNew ? {} : {...rec});
     delete out.id;
-    for(const f of F.fields){
+    for(const f of fields){
       if(f.t==="photos"){ out[f.k] = photos; continue; }
       if(f.t==="file"){ out[f.k] = fileObj; continue; }
       if(f.t==="files"){ out[f.k] = files; continue; }
@@ -1369,6 +1502,7 @@ document.addEventListener("click", async e => {
     if(err){ showNotice(err); t.disabled=false; t.textContent="Add to budget"; }
   }
   else if(act==="addSel") openForm("selections");
+  else if(act==="purchase") openPurchase(id);
   else if(act==="editSel") openForm("selections", id);
   else if(act==="allowances") openForm("allowances");
   else if(act==="toBudget"){
@@ -1386,7 +1520,10 @@ document.addEventListener("click", async e => {
   else if(act==="payDel"){
     if(!t.classList.contains("armed")){ t.classList.add("armed"); t.textContent = "Tap again to remove"; t.style.color = "var(--bad)"; return; }
     const cur = S.costs.find(x=>x.id===id); if(!cur) return; const {id:_, ...body} = cur;
+    const gone = (body.payments||[]).find(p=>p.id===t.dataset.pid);
     const err = await save(`costs/${id}`, {...body, payments:(body.payments||[]).filter(p=>p.id!==t.dataset.pid)});
+    if(!err && gone?.selectionId){ const sel = S.selections.find(x=>x.id===gone.selectionId);
+      if(sel?.purchase?.paymentId===gone.id){ const {id:_x, purchase, ...rest} = sel; await save(`selections/${sel.id}`, {...rest, status:"chosen"}); } }
     if(err) showNotice(err); else openCostDetail(id);
   }
   else if(act==="addLog") openForm("log");

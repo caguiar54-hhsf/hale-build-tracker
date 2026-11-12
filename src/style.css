@@ -489,3 +489,9 @@ table.mini th,table.mini td{padding:7px 10px}
   .acct-name{display:none}
   .head-btn{align-self:flex-start;padding:5px 10px;font-size:.82rem;margin-top:8px}
 }
+
+/* ---------- purchases ---------- */
+.iconbtn.strong{color:var(--accent);font-weight:600}
+.sel .bought{margin-top:6px;padding:8px 10px;border-radius:5px;background:var(--good-soft);color:var(--ink);font-size:.82rem;line-height:1.45}
+.sel .bought b{color:var(--good)}
+.sheet .field[hidden]{display:none}
