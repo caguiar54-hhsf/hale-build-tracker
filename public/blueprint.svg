@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Floor plan of a single-story hale: living/kitchen, two bedrooms, bath, lanai. Drawn as a faint background graphic. -->
+  <g stroke-opacity=".34" stroke-width="2.2">
+    <!-- exterior walls (double line) -->
+    <path d="M150 60H600V250H150Z"/>
+    <path d="M156 66H594V244H156Z" stroke-width="1"/>
+    <!-- interior walls -->
+    <path d="M380 66V170M380 196V244"/>
+    <path d="M380 150H470M496 150H594"/>
+    <path d="M470 150V244"/>
+    <path d="M260 66V120M260 146V164"/>
+    <path d="M156 164H230M256 164H260"/>
+  </g>
+  <g stroke-opacity=".28" stroke-width="1.2">
+    <!-- door swings -->
+    <path d="M380 170A26 26 0 0 1 406 196M380 196H406" />
+    <path d="M470 150A26 26 0 0 0 496 124M496 150V124"/>
+    <path d="M260 120A26 26 0 0 1 286 146M260 146H286"/>
+    <path d="M230 164A26 26 0 0 1 256 190M256 164V190"/>
+    <path d="M300 244A30 30 0 0 1 330 214M330 244V214"/>
+    <!-- windows (gaps with sill lines) -->
+    <path d="M200 60V66M240 60V66M196 63H244"/>
+    <path d="M300 60V66M350 60V66M296 63H354"/>
+    <path d="M430 60V66M470 60V66M426 63H474"/>
+    <path d="M520 60V66M560 60V66M516 63H564"/>
+    <path d="M600 190V220M594 190V220M597 186V224"/>
+    <path d="M150 100V140M156 100V140M153 96V144"/>
+    <!-- kitchen counter + island -->
+    <path d="M170 210H240V244M170 210V244" stroke-dasharray="2 4"/>
+    <path d="M280 188H340V206H280Z"/>
+    <!-- bath fixtures -->
+    <path d="M520 214h52v22h-52z"/>
+    <circle cx="492" cy="226" r="9"/>
+    <!-- lanai (dashed slab) -->
+    <path d="M150 250V286H380V250" stroke-dasharray="6 6"/>
+  </g>
+  <!-- dimension lines -->
+  <g stroke-opacity=".24" stroke-width="1">
+    <path d="M150 34H600M150 28V40M600 28V40M380 30V38"/>
+    <path d="M150 34l6-4M150 34l6 4M600 34l-6-4M600 34l-6 4"/>
+    <path d="M630 60V250M624 60H636M624 250H636"/>
+    <path d="M630 60l-4 6M630 60l4 6M630 250l-4-6M630 250l4-6"/>
+  </g>
+  <g fill="#FFFFFF" fill-opacity=".34" stroke="none" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="11" letter-spacing=".5">
+    <text x="265" y="26">22'-0"</text>
+    <text x="478" y="26">20'-0"</text>
+    <text x="640" y="160" transform="rotate(90 640 160)">28'-0"</text>
+    <text x="196" y="110" font-size="9">LIVING</text>
+    <text x="290" y="110" font-size="9">KITCHEN</text>
+    <text x="410" y="110" font-size="9">BEDROOM 1</text>
+    <text x="398" y="226" font-size="9">BEDROOM 2</text>
+    <text x="514" y="190" font-size="9">BATH</text>
+    <text x="236" y="276" font-size="9">LANAI</text>
+  </g>
+  <!-- north arrow -->
+  <g stroke-opacity=".3" stroke-width="1.2" transform="translate(675 250)">
+    <circle r="16"/>
+    <path d="M0 -12L5 6L0 2L-5 6Z" fill="#FFFFFF" fill-opacity=".3"/>
+  </g>
+  <text x="671" y="226" fill="#FFFFFF" fill-opacity=".34" font-family="ui-monospace, Menlo, monospace" font-size="10">N</text>
+</svg>

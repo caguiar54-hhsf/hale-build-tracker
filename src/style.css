@@ -51,7 +51,17 @@ button,input,select,textarea{font:inherit;color:inherit}
 
 /* header: navy band */
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--head)}
-header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--head);color:var(--head-ink)}
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;color:var(--head-ink);
+  /* blueprint: fine grid + major grid on top, fade so the title side stays clean, floor plan on the right, navy base */
+  background:
+    linear-gradient(rgba(140,196,255,.07) 1px, transparent 1px) 0 0/16px 16px,
+    linear-gradient(90deg, rgba(140,196,255,.07) 1px, transparent 1px) 0 0/16px 16px,
+    linear-gradient(rgba(140,196,255,.10) 1px, transparent 1px) 0 0/80px 80px,
+    linear-gradient(90deg, rgba(140,196,255,.10) 1px, transparent 1px) 0 0/80px 80px,
+    linear-gradient(90deg, var(--head) 0%, color-mix(in srgb, var(--head) 80%, transparent) 38%, transparent 70%),
+    url("/blueprint.svg") right max(0px, calc((100vw - 1080px) / 2 - 40px)) center/auto 94% no-repeat,
+    radial-gradient(900px 340px at 85% 30%, #1B4A78 0%, transparent 70%),
+    var(--head)}
 .top .wrap{padding-block:12px 16px;display:flex;flex-direction:column;gap:14px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--head-line)}
 .proj-switch{display:inline-flex;align-items:center;gap:8px;background:none;border:0;color:var(--head-ink);font-weight:700;font-size:.92rem;cursor:pointer;padding:4px 6px 4px 0;border-radius:8px}
@@ -275,7 +285,16 @@ nav.tabs .m{display:none}
 /* ---------- phone ---------- */
 @media (max-width:640px){
   body{font-size:15px}
-  header.top{position:static;background:var(--head)}
+  header.top{position:static;
+    background:
+      linear-gradient(rgba(140,196,255,.06) 1px, transparent 1px) 0 0/14px 14px,
+      linear-gradient(90deg, rgba(140,196,255,.06) 1px, transparent 1px) 0 0/14px 14px,
+      linear-gradient(rgba(140,196,255,.09) 1px, transparent 1px) 0 0/70px 70px,
+      linear-gradient(90deg, rgba(140,196,255,.09) 1px, transparent 1px) 0 0/70px 70px,
+      linear-gradient(90deg, color-mix(in srgb, var(--head) 88%, transparent) 0%, color-mix(in srgb, var(--head) 55%, transparent) 55%, transparent 85%),
+      url("/blueprint.svg") right -150px top 34px/auto 170px no-repeat,
+      radial-gradient(420px 220px at 90% 10%, #1B4A78 0%, transparent 70%),
+      var(--head)}
   .top .wrap{padding-block:16px 14px;gap:10px}
   .title-row{align-items:flex-start;flex-direction:column;gap:2px}
   .title-row h1{font-size:1.5rem}
