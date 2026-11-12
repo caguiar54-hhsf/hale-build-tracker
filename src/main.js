@@ -225,6 +225,7 @@ function vOverview(){
     else if(dsp[d.id].spent > 0 && d.status!=="funded") attention.push([`${drawLabel(d)}: payments recorded before the draw is funded`,"draws"]); });
   const pmA = phaseMoney(); S.phases.forEach(p => { const over = pmA[p.id].committed - (+p.budget||0); if(+p.budget && over > 0.004) attention.push([`${p.title} is ${money(over)} over its budget`,"phases"]); });
   const insN = S.vendors.filter(v => { const st = insState(v); return st && st[0]==="failed"; }).length; if(insN) attention.push([`${insN} vendor${insN>1?"s'":"'s"} insurance has expired`,"vendors"]);
+  const noRc = S.costs.filter(c => costMath(c).paid > 0 && !(c.receipts||[]).length).length; if(noRc) attention.push([`${noRc} paid cost${noRc>1?"s have":" has"} no receipt attached`,"budget"]);
   const wSoon = S.selections.filter(x=>x.purchase && x.warrantyExp && daysTo(x.warrantyExp)>=0 && daysTo(x.warrantyExp)<=30).length; if(wSoon) attention.push([`${wSoon} warrant${wSoon>1?"ies end":"y ends"} in the next 30 days`,"warranties"]);
   const fs = fundingSplit(); if(fs.nUnset && S.draws.length) attention.push([`${fs.nUnset} payment${fs.nUnset>1?"s don't":" doesn't"} say if it came from the loan or your own money`,"budget"]);
   const nP = S.punch.filter(p=>p.status==="open").length; if(nP) attention.push([`${nP} open punch list item${nP>1?"s":""}`,"punch"]);
@@ -402,6 +403,7 @@ function vBudget(){
 /* ---------- cost detail: payments, retainage, receipts ---------- */
 function openCostDetail(id){
   const c = S.costs.find(x=>x.id===id); if(!c){ closeSheet(); return; }
+  openCostId = id;
   const m = costMath(c);
   const receipts = (c.receipts||[]).filter(r=>r && isAsset(r.id));
   const phase = c.phaseId ? (S.phases.find(p=>p.id===c.phaseId)?.title||"") : "";
@@ -426,7 +428,8 @@ function openCostDetail(id){
     ${m.pays.length ? `<div class="pays">${m.pays.map(p=>`<div class="pay">
         <div style="min-width:0"><div><b class="num">${money(p.amount)}</b> ${p.kind==="release"?`<span class="pill held">Retainage release</span>`:""}</div>
           <div class="hint">${[fmtDate(p.date), p.method==="Loan draw"?"":p.method, p.ref?`#${p.ref}`:"", +p.retained?`${money(p.retained)} retainage held`:"", p.note].filter(Boolean).map(esc).join(" · ")}</div>
-          ${readOnly ? `<div class="hint">From: ${esc(srcLabel(p))}</div>` : `<label class="srcpick"><span>From</span><select data-src-pid="${esc(p.id)}" data-id="${esc(c.id)}" aria-label="Where this payment's money came from">${sourceOptions(srcValue(p))}</select></label>`}</div>
+          ${readOnly ? `<div class="hint">From: ${esc(srcLabel(p))}</div>` : `<label class="srcpick"><span>From</span><select data-src-pid="${esc(p.id)}" data-id="${esc(c.id)}" aria-label="Where this payment's money came from">${sourceOptions(srcValue(p))}</select></label>`}
+          <div class="payrc">${fileStrip((c.receipts||[]).filter(r=>r.paymentId===p.id))}${!p.legacy ? upBtn("costs", c.id, "receipts", (c.receipts||[]).some(r=>r.paymentId===p.id) ? "Add another receipt" : "Attach receipt", p.id) : ""}</div></div>
         ${!p.legacy && !readOnly ? `<button type="button" class="iconbtn" data-act="payDel" data-id="${esc(c.id)}" data-pid="${esc(p.id)}">Remove</button>` : ""}
       </div>`).join("")}</div>` : `<p class="empty" style="margin:0">No payments yet.</p>`}
 
@@ -440,6 +443,8 @@ function openCostDetail(id){
         <label class="field" for="payMethod"><span class="label">Paid by</span><select id="payMethod">${PAY_METHODS.map(x=>`<option>${x}</option>`).join("")}</select></label>
         <label class="field" for="payRef"><span class="label">Check or reference no.</span><input id="payRef" placeholder="Optional"></label>
         <label class="field full" for="payNote"><span class="label">Note</span><input id="payNote" placeholder="e.g. Progress payment 2 of 4"></label>
+        <div class="field full"><span class="label">Receipt or invoice</span><div class="thumbs" id="payRcBox"></div>
+          <label class="btn upl" for="payRcIn">Attach receipt<input type="file" id="payRcIn" accept="${ACCEPT_DOCS}" multiple hidden></label><div class="hint" id="payRcMsg" aria-live="polite"></div></div>
       </div>
       <div class="err" id="payErr" hidden></div>
       <button class="btn primary" type="submit">Record payment</button>
@@ -460,6 +465,10 @@ function openCostDetail(id){
     <div class="thumbs">${receipts.map(fileTile).join("")}
       ${!readOnly ? `<label class="thumb add" for="rcIn" title="Add receipt"><span>+</span><input type="file" id="rcIn" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label>` : ""}</div>
     <div class="hint" id="rcMsg" aria-live="polite">${receipts.length ? "" : "Snap a photo of the receipt or upload the PDF invoice."}</div>
+    <h4 class="cd-h">Warranty</h4>
+    ${warrantyState(c) ? `<div style="margin-bottom:8px"><span class="pill ${warrantyState(c)[0]}">${esc(warrantyState(c)[1])}</span></div>` : ""}
+    ${fileStrip(c.warrantyDocs)}
+    <div class="hint">${(c.warrantyDocs||[]).length ? "" : "Warranty cards, registration confirmations or manuals. "}${upBtn("costs", c.id, "warrantyDocs", (c.warrantyDocs||[]).length ? "Add another warranty document" : "Add warranty document")}${!warrantyState(c) && !readOnly ? ` · <button type="button" class="iconbtn" style="padding:0" data-act="editCost" data-id="${esc(c.id)}">Set warranty end date</button>` : ""}</div>
     ${c.notes ? `<h4 class="cd-h">Notes</h4><p style="margin:0;white-space:pre-wrap">${esc(c.notes)}</p>` : ""}
 
     <div class="foot">
@@ -477,8 +486,14 @@ function openCostDetail(id){
     return {...body, payments: pays}; };
   const commit = async (out, errEl) => { const err = await save(`costs/${id}`, out); if(err){ errEl.textContent = err; errEl.hidden = false; return false; } openCostDetail(id); return true; };
 
-  const pf = $("#payForm");
+  const pf = $("#payForm"); let payFiles = [];
   if(pf){
+    const drawPay = () => { $("#payRcBox").innerHTML = payFiles.map((r,i)=>`<div class="thumb">${/^image\//.test(r.type||"") ? `<img src="${blob(r.id)}" data-path="${esc(r.id)}" alt="">` : `<span class="pdfmark">PDF</span>`}<button type="button" data-prm="${i}" aria-label="Remove">✕</button></div>`).join("");
+      $("#payRcBox").querySelectorAll("[data-prm]").forEach(x => x.onclick = () => { payFiles.splice(+x.dataset.prm,1); drawPay(); }); };
+    $("#payRcIn").onchange = async () => { const inp = $("#payRcIn"); const list = [...inp.files]; inp.value = ""; let failed = "";
+      for(const [n,file] of list.entries()){ $("#payRcMsg").textContent = `Uploading ${n+1} of ${list.length}…`;
+        try { const r = await assets.upload(file); payFiles.push({id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}); drawPay(); } catch(e){ failed = uploadErr(e, file); } }
+      $("#payRcMsg").textContent = failed || ""; };
     const billed = $("#payBilled"), heldIn = $("#payHeld"), now = $("#payNow");
     let heldTouched = false;
     const recalc = () => { if(!heldIn) return; const b = +billed.value||0;
@@ -490,8 +505,10 @@ function openCostDetail(id){
       if(!(b>0)){ err.textContent = "Enter the amount."; err.hidden = false; billed.focus(); return; }
       if(h<0 || h>b){ err.textContent = "Retainage can't be more than the amount billed."; err.hidden = false; return; }
       const out = base();
-      out.payments.push({ id:newId(), kind:"payment", date:$("#payDate").value||today(), amount:+(b-h).toFixed(2), retained:+h.toFixed(2),
+      const pid = newId();
+      out.payments.push({ id:pid, kind:"payment", date:$("#payDate").value||today(), amount:+(b-h).toFixed(2), retained:+h.toFixed(2),
         source:$("#paySrc").value, method:$("#payMethod").value, ref:$("#payRef").value.trim(), note:$("#payNote").value.trim(), by: me||"" });
+      if(payFiles.length) out.receipts = [...(out.receipts||[]), ...payFiles.map(f=>({...f, paymentId:pid}))];
       if(out.status==="estimate") out.status = "committed";
       if(!out.amount) out.amount = +(b).toFixed(2);
       pf.querySelector("[type=submit]").disabled = true;
@@ -528,7 +545,35 @@ function openCostDetail(id){
     msg.textContent = failed || "";
   };
 }
-function closeSheet(){ const sc = $("#scrim"); sc.hidden = true; sc.innerHTML = ""; sc.classList.remove("lbx"); }
+function closeSheet(){ const sc = $("#scrim"); sc.hidden = true; sc.innerHTML = ""; sc.classList.remove("lbx"); openCostId = null; }
+let openCostId = null;
+const ACCEPT_DOCS = "image/jpeg,image/png,image/webp,application/pdf";
+/* Small row of file tiles that open the file */
+function fileStrip(list){
+  const fs = (list||[]).filter(r=>r && isAsset(r.id)); if(!fs.length) return "";
+  return `<div class="thumbs sm">${fs.map(r=>`<a class="thumb" href="${blob(r.id)}" data-fpath="${esc(r.id)}" target="_blank" rel="noopener" title="${esc(r.name||"File")}">${/^image\//.test(r.type||"") ? `<img src="${blob(r.id)}" data-path="${esc(r.id)}" alt="${esc(r.name||"")}">` : `<span class="pdfmark">PDF</span>`}</a>`).join("")}</div>`;
+}
+/* Upload button that saves straight onto a record's file list */
+const upBtn = (coll, id, field, label, pid) => readOnly ? "" : `<label class="iconbtn upl-inline">${esc(label)}<input type="file" hidden multiple accept="${ACCEPT_DOCS}" data-up="${field}" data-coll="${coll}" data-id="${esc(id)}"${pid?` data-pid="${esc(pid)}"`:""}></label>`;
+async function inlineUpload(inp){
+  const list = [...inp.files]; inp.value = ""; if(!list.length) return;
+  const {up:field, coll, id, pid} = inp.dataset;
+  const lbl = inp.closest("label"); const txt = lbl?.firstChild; const orig = txt?.textContent; if(txt) txt.textContent = "Uploading…";
+  const added = []; let failed = "";
+  for(const f of list){ try { const r = await assets.upload(f); added.push({id:r.id, type:r.contentType, name:String(f.name).slice(0,200), size:r.sizeBytes, ...(pid?{paymentId:pid}:{})}); } catch(e){ failed = uploadErr(e, f); } }
+  if(added.length){
+    const rec = (S[coll]||[]).find(x=>x.id===id);
+    if(rec){ const {id:_, ...body} = rec;
+      let err = await save(`${coll}/${id}`, {...body, [field]:[...(body[field]||[]), ...added]});
+      // a purchased selection's receipts also go on the budget line it was paid from
+      if(!err && coll==="selections" && field==="receipts" && rec.purchase?.costId){ const c = S.costs.find(x=>x.id===rec.purchase.costId);
+        if(c){ const {id:_c, ...cb} = c; err = await save(`costs/${c.id}`, {...cb, receipts:[...(cb.receipts||[]), ...added.map(a=>({...a, paymentId:rec.purchase.paymentId}))]}); } }
+      if(err) failed = err; }
+  }
+  if(txt && document.contains(txt)) txt.textContent = orig;
+  if(failed) showNotice(failed);
+  if(coll==="costs" && openCostId===id) openCostDetail(id);
+}
 const uploadErr = (e, file) => ({unsupported_type:`${file.name} isn't supported. Use a JPG, PNG, WebP or PDF.`, too_large:`${file.name} is over 20 MB.`})[e?.code] || `Couldn't upload ${file.name}. Try again.`;
 
 /* ---------- CSV export ---------- */
@@ -606,7 +651,9 @@ function vSelections(){
         ${os!==null ? `<div><span class="pill soon">${os<0 ? "Order date passed" : os===0 ? "Order today" : `Order within ${os} day${os===1?"":"s"}`}</span></div>` : s.orderBy && !["ordered","delivered","installed"].includes(s.status) ? `<div class="sub">Order by ${fmtDate(s.orderBy)}${s.leadWeeks?` · ${s.leadWeeks} wk lead time`:""}</div>` : s.leadWeeks ? `<div class="sub">${s.leadWeeks} wk lead time</div>`:""}
         ${s.purchase ? `<div class="bought"><b class="num">${money(s.purchase.total)}</b> paid ${fmtDate(s.purchase.date)}<br>${esc(srcLabel({source:s.purchase.source}))}${s.purchase.vendor?` · ${esc(s.purchase.vendor)}`:""}</div>
           ${s.status==="ordered" && s.deliveryDate ? `<div class="sub">Delivery expected ${fmtDate(s.deliveryDate)}</div>` : ""}
-          ${warrantyState(s) ? `<div><span class="pill ${warrantyState(s)[0]}">${esc(warrantyState(s)[1])}</span></div>` : ""}` : ""}
+          ${warrantyState(s) ? `<div><span class="pill ${warrantyState(s)[0]}">${esc(warrantyState(s)[1])}</span></div>` : ""}
+          <div class="docline">${(s.receipts||[]).length ? `<span class="ok-mark">${(s.receipts||[]).length} receipt${(s.receipts||[]).length>1?"s":""}</span>` : `<span class="miss-mark">No receipt</span>`}${(s.warrantyDocs||[]).length ? `<span class="ok-mark">${(s.warrantyDocs||[]).length} warranty doc${(s.warrantyDocs||[]).length>1?"s":""}</span>` : ""}</div>
+          <div class="docline">${upBtn("selections", s.id, "receipts", "Add receipt")}${upBtn("selections", s.id, "warrantyDocs", "Add warranty doc")}</div>` : ""}
         ${s.notes ? `<div class="sub" style="color:var(--ink)">${esc(trunc(s.notes,120))}</div>`:""}
         <div class="acts">
           ${link ? `<a class="ext" href="${esc(link)}" target="_blank" rel="noopener noreferrer">View product ↗</a>`:""}
@@ -691,14 +738,17 @@ function openPurchase(id){
       <label class="field" for="puWarrExp"><span class="label">Warranty expires</span><input id="puWarrExp" type="date"></label>
       <label class="field full" for="puWarrNote"><span class="label">Warranty details</span><input id="puWarrNote" placeholder="e.g. Parts 5 years, labor 1 year. Register within 30 days."></label>
       <div class="field full"><span class="label">Receipt</span><div class="thumbs" id="puFiles"></div>
-        <label class="btn upl" for="puIn">Add receipt<input type="file" id="puIn" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label>
+        <label class="btn upl" for="puIn">Add receipt<input type="file" id="puIn" accept="${ACCEPT_DOCS}" multiple hidden></label>
         <div class="hint" id="puMsg" aria-live="polite">Photo or PDF of the receipt or order confirmation.</div></div>
+      <div class="field full"><span class="label">Warranty documents</span><div class="thumbs" id="puWFiles"></div>
+        <label class="btn upl" for="puWIn">Add warranty document<input type="file" id="puWIn" accept="${ACCEPT_DOCS}" multiple hidden></label>
+        <div class="hint" id="puWMsg" aria-live="polite">Warranty card, registration confirmation or manual. You can add these later too.</div></div>
     </div>
     <div class="err" id="puErr" hidden></div>
     <div class="foot"><div class="right"><button type="button" class="btn" id="cancelBtn">Cancel</button><button type="submit" class="btn primary">Record purchase</button></div></div>
   </form>`;
   scrim.hidden = false;
-  const form = $("#sheet"); let files = [];
+  const form = $("#sheet"); let files = [], wfiles = [];
   const amt = $("#puAmt"), extra = $("#puExtra"), date = $("#puDate"), warr = $("#puWarr"), wexp = $("#puWarrExp"), line = $("#puLine"), st = $("#puStatus"), deliv = $("#puDeliv");
   let wexpTouched = false;
   const recalc = () => { $("#puTotal").textContent = money((+amt.value||0) + (+extra.value||0));
@@ -716,6 +766,12 @@ function openPurchase(id){
     for(const [n,file] of list.entries()){ $("#puMsg").textContent = `Uploading ${n+1} of ${list.length}…`;
       try { const r = await assets.upload(file); files.push({id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}); drawFiles(); } catch(e){ failed = uploadErr(e, file); } }
     $("#puMsg").textContent = failed || "Added."; };
+  const drawW = () => { $("#puWFiles").innerHTML = wfiles.map((r,i)=>`<div class="thumb">${/^image\//.test(r.type||"") ? `<img src="${blob(r.id)}" data-path="${esc(r.id)}" alt="">` : `<span class="pdfmark">PDF</span>`}<button type="button" data-wrm="${i}" aria-label="Remove">✕</button></div>`).join("");
+    $("#puWFiles").querySelectorAll("[data-wrm]").forEach(x => x.onclick = () => { wfiles.splice(+x.dataset.wrm,1); drawW(); }); };
+  $("#puWIn").onchange = async () => { const inp = $("#puWIn"); const list = [...inp.files]; inp.value = ""; let failed = "";
+    for(const [n,file] of list.entries()){ $("#puWMsg").textContent = `Uploading ${n+1} of ${list.length}…`;
+      try { const r = await assets.upload(file); wfiles.push({id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}); drawW(); } catch(e){ failed = uploadErr(e, file); } }
+    $("#puWMsg").textContent = failed || "Added."; };
   const close = closeSheet;
   $("#cancelBtn").onclick = close; scrim.onclick = e => { if(e.target===scrim) close(); }; form.onkeydown = e => { if(e.key==="Escape") close(); };
   form.onsubmit = async e => { e.preventDefault();
@@ -730,11 +786,11 @@ function openPurchase(id){
     if(line.value==="new"){
       costId = newId();
       e1 = await save(`costs/${costId}`, { item: s.item + (s.room?` (${s.room})`:""), vendor, category: selCostCat(s), phaseId: phaseOf(s) ? s.phaseId : "", amount: total, status:"committed", date: when,
-        payments:[payment], receipts: files, notes:"Purchased from Selections", selectionId: s.id, createdAt: new Date().toISOString() });
+        payments:[payment], receipts: files.map(f=>({...f, paymentId:payment.id})), notes:"Purchased from Selections", selectionId: s.id, createdAt: new Date().toISOString() });
     } else {
       costId = line.value; const cur = S.costs.find(c=>c.id===costId); const {id:_, ...body} = cur;
       const pays = (Array.isArray(body.payments) && body.payments.length) ? [...body.payments] : payList(cur).map(p=>{ const {legacy, ...q} = p; return {...q, id:newId()}; });
-      e1 = await save(`costs/${costId}`, { ...body, status: body.status==="estimate" ? "committed" : body.status, vendor: body.vendor || vendor, payments:[...pays, payment], receipts:[...(body.receipts||[]), ...files] });
+      e1 = await save(`costs/${costId}`, { ...body, status: body.status==="estimate" ? "committed" : body.status, vendor: body.vendor || vendor, payments:[...pays, payment], receipts:[...(body.receipts||[]), ...files.map(f=>({...f, paymentId:payment.id}))] });
     }
     if(e1){ btn.disabled = false; btn.textContent = "Record purchase"; return err(e1); }
     const {id:_s, ...sb} = S.selections.find(z=>z.id===s.id) || s;
@@ -742,7 +798,7 @@ function openPurchase(id){
       purchase: { date:when, amount:a, extra:x, total, vendor, ref:payment.ref, source:src, method:payment.method, costId, paymentId:payment.id },
       deliveryDate: st.value==="ordered" ? deliv.value : (sb.deliveryDate||""), serial: $("#puSerial").value.trim(),
       warrantyTerm: warr.value, warrantyExp: warr.value==="life" ? "" : wexp.value, warrantyNote: $("#puWarrNote").value.trim(),
-      receipts: [...(sb.receipts||[]), ...files] });
+      receipts: [...(sb.receipts||[]), ...files], warrantyDocs: [...(sb.warrantyDocs||[]), ...wfiles] });
     if(e2){ btn.disabled = false; btn.textContent = "Record purchase"; return err(e2); }
     close();
   };
@@ -779,24 +835,31 @@ const phaseTitle = id => id ? (S.phases.find(p=>p.id===id)?.title || "") : "";
 const signed = n => (n<0?"−":"+") + money(Math.abs(n));
 
 function vWarranties(){
-  const items = S.selections.filter(s=>s.purchase).sort((a,b)=> (a.warrantyExp||"9999").localeCompare(b.warrantyExp||"9999"));
+  const fromSel = S.selections.filter(s=>s.purchase).map(s=>({kind:"selections", r:s, name:s.item, where:[phaseOf(s)?.title, s.room], date:s.purchase.date, vendor:s.purchase.vendor, ref:s.purchase.ref, total:s.purchase.total, src:srcLabel({source:s.purchase.source})}));
+  const selCostIds = new Set(S.selections.filter(s=>s.purchase).map(s=>s.purchase.costId));
+  const fromCost = S.costs.filter(c => !selCostIds.has(c.id) && (c.warrantyExp || (c.warrantyDocs||[]).length)).map(c => { const m = costMath(c); const last = m.pays[m.pays.length-1];
+    return {kind:"costs", r:c, name:c.item, where:[S.phases.find(p=>p.id===c.phaseId)?.title, catOf(c)], date:last?.date||c.date, vendor:c.vendor, ref:"", total:m.paid||m.amt, src: last ? srcLabel(last) : ""}; });
+  const items = [...fromSel, ...fromCost].sort((a,b)=> (a.r.warrantyExp||"9999").localeCompare(b.r.warrantyExp||"9999"));
   return `
   <div class="viewhead"><h2>Purchases and warranties</h2></div>
-  <p class="hint" style="margin:-4px 0 14px;max-width:62ch">Everything bought through Selections, with where it came from, serial numbers, receipts and when the warranty ends. Keep this handy after move-in.</p>
+  <p class="hint" style="margin:-4px 0 14px;max-width:64ch">Everything bought through Selections, plus any budget item with a warranty: where it came from, serial numbers, receipts, warranty documents and when coverage ends. To add a budget item here, open it on the Budget tab and add its warranty.</p>
   <div class="panel" style="padding-block:2px"><div class="rows">
-    ${items.length ? items.map(s=>{ const w = warrantyState(s); const rc = (s.receipts||[]).filter(r=>r&&isAsset(r.id));
+    ${items.length ? items.map(x=>{ const r = x.r; const w = warrantyState(r);
       return `<div class="row"><div style="min-width:0">
-        <div class="t">${esc(s.item)}</div>
-        <div class="meta">${[phaseOf(s)?.title, s.room].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join("")}</div>
-        <div class="meta"><span>Bought ${fmtDate(s.purchase.date)}${s.purchase.vendor?` from ${esc(s.purchase.vendor)}`:""}</span>${s.purchase.ref?`<span>Order ${esc(s.purchase.ref)}</span>`:""}${s.serial?`<span class="copyable">Serial/model ${esc(s.serial)}</span>`:""}</div>
-        ${s.warrantyNote?`<div class="txt">${esc(s.warrantyNote)}</div>`:""}
-        ${rc.length?`<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px">${rc.map(r=>`<a class="ext" href="${blob(r.id)}" data-fpath="${esc(r.id)}" target="_blank" rel="noopener">${esc(trunc(r.name||"Receipt",32))}</a>`).join("")}</div>`:""}
+        <div class="t">${esc(x.name)}</div>
+        <div class="meta">${x.where.filter(Boolean).map(t=>`<span>${esc(t)}</span>`).join("")}</div>
+        <div class="meta">${x.date?`<span>Bought ${fmtDate(x.date)}${x.vendor?` from ${esc(x.vendor)}`:""}</span>`:""}${x.ref?`<span>Order ${esc(x.ref)}</span>`:""}${r.serial?`<span class="copyable">Serial/model ${esc(r.serial)}</span>`:""}</div>
+        ${r.warrantyNote?`<div class="txt">${esc(r.warrantyNote)}</div>`:""}
+        <div class="docgrid">
+          <div><div class="label">Receipts</div>${fileStrip(r.receipts) || `<div class="hint miss">None yet</div>`}${upBtn(x.kind, r.id, "receipts", "Add receipt")}</div>
+          <div><div class="label">Warranty documents</div>${fileStrip(r.warrantyDocs) || `<div class="hint">None yet</div>`}${upBtn(x.kind, r.id, "warrantyDocs", "Add warranty document")}</div>
+        </div>
       </div><div class="side">
-        ${w?`<span class="pill ${w[0]}">${esc(w[1])}</span>`:`<span class="hint">No warranty recorded</span>`}
-        <span class="amt">${money(s.purchase.total)}</span><span class="hint">${esc(srcLabel({source:s.purchase.source}))}</span>
-        <button class="iconbtn write" data-act="editSel" data-id="${esc(s.id)}">Edit</button>
+        ${w?`<span class="pill ${w[0]}">${esc(w[1])}</span>`:`<span class="hint">No warranty date</span>`}
+        <span class="amt">${money(x.total)}</span>${x.src?`<span class="hint">${esc(x.src)}</span>`:""}
+        ${x.kind==="selections" ? `<button class="iconbtn write" data-act="editSel" data-id="${esc(r.id)}">Edit</button>` : `<button class="iconbtn" data-act="costDetail" data-id="${esc(r.id)}">Open</button>`}
       </div></div>`; }).join("")
-    : `<p class="empty" style="padding:14px 0">Nothing purchased yet. In Selections, tap <b>Purchase item</b> on a fixture or finish to record what was paid, where it came from and its warranty.</p>`}
+    : `<p class="empty" style="padding:14px 0">Nothing here yet. In Selections, tap <b>Purchase item</b> to record a purchase with its receipt and warranty. For other things like the roof or water heater, open the cost on the Budget tab and add its warranty.</p>`}
   </div></div>`;
 }
 
@@ -1152,6 +1215,11 @@ const phaseOpts = () => [["","General"], ...S.phases.map(p=>[p.id,p.title])];
 const vendorNames = () => [...new Set([...S.costs.map(c=>c.vendor), ...S.contacts.map(c=>c.company), ...S.vendors.map(v=>v.name)].filter(Boolean))].sort();
 const FORMS = {
   selections: { title:"Selection", coll:"selections",
+    after: async (o, before) => {
+      if(!o.purchase?.costId) return; const c = S.costs.find(x=>x.id===o.purchase.costId); if(!c) return;
+      const have = new Set((c.receipts||[]).map(r=>r.id)); const add = (o.receipts||[]).filter(r=>!have.has(r.id));
+      if(add.length){ const {id:_, ...cb} = c; await save(`costs/${c.id}`, {...cb, receipts:[...(cb.receipts||[]), ...add.map(r=>({...r, paymentId:o.purchase.paymentId}))]}); }
+    },
     post:o=>{ const p = S.phases.find(x=>x.id===o.phaseId);   // suggest an order-by date from the phase start and lead time
       if(!o.orderBy && p?.start && +o.leadWeeks){ const d = new Date(p.start+"T12:00:00"); d.setDate(d.getDate() - Math.round(+o.leadWeeks*7)); o.orderBy = d.toISOString().slice(0,10); } },
     fields:[
@@ -1173,6 +1241,8 @@ const FORMS = {
     {k:"serial",l:"Serial or model no.",when:d=>!!d.purchase},
     {k:"warrantyExp",l:"Warranty expires",t:"date",when:d=>!!d.purchase},
     {k:"warrantyNote",l:"Warranty details",when:d=>!!d.purchase,ph:"e.g. Register online within 30 days"},
+    {k:"receipts",l:"Receipts",t:"files",full:1,btn:"Add receipt",when:d=>!!d.purchase},
+    {k:"warrantyDocs",l:"Warranty documents",t:"files",full:1,btn:"Add warranty document",hint:"Warranty card, registration confirmation or manual.",when:d=>!!d.purchase},
     {k:"notes",l:"Notes",t:"textarea",full:1,ph:"Dimensions, why you like it, other options you compared…"}]},
   allowances: { title:"Allowances", single:1, path:()=>"meta/allowances", intro:"Enter the allowance for each type from the builder's contract, or your own spending target. Leave blank to skip.",
     fields: CATS.map(c=>({k:c,l:c+" ($)",t:"number"})) },
@@ -1212,6 +1282,9 @@ const FORMS = {
     {k:"due",l:"Next payment due",t:"date"},
     {k:"phaseId",l:"Phase",t:"select",o:phaseOpts},
     {k:"receipts",l:"Receipts & invoices",t:"files",full:1},
+    {k:"warrantyExp",l:"Warranty expires",t:"date"},
+    {k:"warrantyNote",l:"Warranty details",ph:"e.g. Roof: 10-yr workmanship"},
+    {k:"warrantyDocs",l:"Warranty documents",t:"files",full:1,btn:"Add warranty document",hint:"Warranty certificate, registration or manual. Photo or PDF."},
     {k:"notes",l:"Notes",t:"textarea",full:1}]},
   log: { title:"Site note", coll:"log", fields:[
     {k:"date",l:"Date",t:"date",req:1},
@@ -1305,7 +1378,7 @@ function openForm(kind, id, preset){
   const fields = F.fields.filter(f => !f.when || f.when(data));
   let photos = [...(data.photos||[])].filter(isAsset);
   let fileObj = data.file && isAsset(data.file.id) ? {...data.file} : null;
-  let files = (F.fields.find(f=>f.t==="files") ? [...(data[F.fields.find(f=>f.t==="files").k]||[])] : []).filter(r=>r && isAsset(r.id));
+  const filesBy = {}; fields.filter(f=>f.t==="files").forEach(f => { filesBy[f.k] = [...(data[f.k]||[])].filter(r=>r && isAsset(r.id)); });
   const scrim = $("#scrim"); scrim.classList.remove("lbx");
   scrim.innerHTML = `<form class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" novalidate>
     <h3 id="sheetTitle">${F.single ? F.title : (isNew?"Add ":"Edit ")+F.title.toLowerCase()}</h3>
@@ -1318,9 +1391,9 @@ function openForm(kind, id, preset){
             : `<div class="hint">Photo uploads need Editor access to this page. Ask the page owner to change your access.</div>`}</div>`;
       }
       if(f.t==="files"){
-        return `<div class="field full"><span class="label">${esc(f.l)}</span><div class="thumbs" id="filesBox"></div>
-          <label class="btn upl" for="filesIn">${esc(f.btn||"Add receipt or invoice")}<input type="file" id="filesIn" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label>
-          <div class="hint" id="filesMsg" aria-live="polite">Photo or PDF, up to 20 MB each.</div></div>`;
+        return `<div class="field full"><span class="label">${esc(f.l)}</span><div class="thumbs" id="filesBox_${f.k}"></div>
+          <label class="btn upl" for="filesIn_${f.k}">${esc(f.btn||"Add receipt or invoice")}<input type="file" id="filesIn_${f.k}" data-fk="${f.k}" accept="${ACCEPT_DOCS}" multiple hidden></label>
+          <div class="hint" id="filesMsg_${f.k}" aria-live="polite">${esc(f.hint||"Photo or PDF, up to 20 MB each.")}</div></div>`;
       }
       if(f.t==="file"){
         return `<div class="field full"><span class="label">${esc(f.l)}</span><div id="fileBox"></div>
@@ -1365,21 +1438,23 @@ function openForm(kind, id, preset){
     if($("#fileBtn")) $("#fileBtn").textContent = "Replace file";
   };
   drawFile();
-  const drawFiles = () => { const b = $("#filesBox"); if(!b) return;
-    b.innerHTML = files.map((r,i)=>`<div class="thumb">${/^image\//.test(r.type||"") ? `<img src="${blob(r.id)}" data-path="${esc(r.id)}" alt="${esc(r.name||"Receipt")}">` : `<span class="pdfmark">PDF</span>`}<button type="button" data-frm="${i}" aria-label="Remove ${esc(r.name||"file")}">✕</button></div>`).join("");
-    b.querySelectorAll("[data-frm]").forEach(x => x.onclick = () => { files.splice(+x.dataset.frm,1); drawFiles(); });
+  const drawFiles = k => { const b = document.getElementById("filesBox_"+k); if(!b) return; const files = filesBy[k];
+    b.innerHTML = files.map((r,i)=>`<div class="thumb">${/^image\//.test(r.type||"") ? `<img src="${blob(r.id)}" data-path="${esc(r.id)}" alt="${esc(r.name||"File")}">` : `<span class="pdfmark">PDF</span>`}<button type="button" data-frm="${i}" aria-label="Remove ${esc(r.name||"file")}">✕</button></div>`).join("");
+    b.querySelectorAll("[data-frm]").forEach(x => x.onclick = () => { files.splice(+x.dataset.frm,1); drawFiles(k); });
   };
-  drawFiles();
-  const fsIn = $("#filesIn");
-  if(fsIn) fsIn.onchange = async () => {
-    const list = [...fsIn.files]; fsIn.value = ""; const msg = $("#filesMsg"); let failed = "";
-    for(const [n,file] of list.entries()){
-      msg.textContent = `Uploading ${n+1} of ${list.length}…`;
-      try { const r = await assets.upload(file); files.push({id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}); drawFiles(); }
-      catch(e){ failed = uploadErr(e, file); }
-    }
-    msg.textContent = failed || "Added. Save to keep them.";
-  };
+  Object.keys(filesBy).forEach(k => {
+    drawFiles(k);
+    const fsIn = document.getElementById("filesIn_"+k);
+    if(fsIn) fsIn.onchange = async () => {
+      const list = [...fsIn.files]; fsIn.value = ""; const msg = document.getElementById("filesMsg_"+k); let failed = "";
+      for(const [n,file] of list.entries()){
+        msg.textContent = `Uploading ${n+1} of ${list.length}…`;
+        try { const r = await assets.upload(file); filesBy[k].push({id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}); drawFiles(k); }
+        catch(e){ failed = uploadErr(e, file); }
+      }
+      msg.textContent = failed || "Added. Save to keep them.";
+    };
+  });
   const fin = $("#fileIn");
   if(fin) fin.onchange = async () => {
     const file = fin.files[0]; fin.value = ""; if(!file) return; const msg = $("#fileMsg");
@@ -1411,7 +1486,7 @@ function openForm(kind, id, preset){
     for(const f of fields){
       if(f.t==="photos"){ out[f.k] = photos; continue; }
       if(f.t==="file"){ out[f.k] = fileObj; continue; }
-      if(f.t==="files"){ out[f.k] = files; continue; }
+      if(f.t==="files"){ out[f.k] = filesBy[f.k]; continue; }
       const raw = form.elements.namedItem(f.k).value.trim();
       if(f.req && !raw){ showErr(`${f.l} is required.`); form.elements.namedItem(f.k).focus(); return; }
       if(f.t==="url" && raw && !safeUrl(raw)){ showErr("Links should be a full web address starting with https://"); form.elements.namedItem(f.k).focus(); return; }
@@ -1541,7 +1616,8 @@ document.addEventListener("click", async e => {
   }
 });
 $("#editProject").addEventListener("click", ()=>openForm("project"));
-document.addEventListener("change", e => { if(e.target.id==="costPhaseSel"){ ui.costPhase = e.target.value; render(); }
+document.addEventListener("change", e => { if(e.target.matches?.("input[type=file][data-up]")){ inlineUpload(e.target); return; }
+  if(e.target.id==="costPhaseSel"){ ui.costPhase = e.target.value; render(); }
   if(e.target.id==="selPhaseSel"){ selFilter.phase = e.target.value; render(); } });
 document.addEventListener("error", e => {
   const img = e.target; if(!(img instanceof HTMLImageElement) || img.dataset.failed) return;

@@ -495,3 +495,17 @@ table.mini th,table.mini td{padding:7px 10px}
 .sel .bought{margin-top:6px;padding:8px 10px;border-radius:5px;background:var(--good-soft);color:var(--ink);font-size:.82rem;line-height:1.45}
 .sel .bought b{color:var(--good)}
 .sheet .field[hidden]{display:none}
+
+/* ---------- receipts & warranty docs ---------- */
+.thumbs.sm{gap:6px;margin:4px 0}
+.thumbs.sm .thumb{width:48px;height:48px}
+.upl-inline{cursor:pointer;color:var(--link);font-weight:500;padding:4px 0}
+.upl-inline:hover{text-decoration:underline}
+.payrc{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px}
+.docgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
+.docline{display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:.8rem;margin-top:4px}
+.ok-mark{color:var(--good);font-weight:500}
+.miss-mark,.hint.miss{color:var(--bad);font-weight:500}
+.sel .docline .upl-inline{padding:2px 0;font-size:.8rem}
+a.thumb{text-decoration:none}
+.thumbs .thumb{border:1px solid var(--line)}
