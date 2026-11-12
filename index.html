@@ -59,14 +59,26 @@
   <div class="wrap">
     <div class="topbar">
       <button class="proj-switch" id="switchProject" type="button" title="Switch build"><img src="/icon.svg" alt="" width="22" height="22"><span>Hale Build</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button>
-      <div class="acct"><span id="whoami"></span><button class="btn-link" type="button" data-signout>Sign out</button></div>
+      <div class="acct">
+        <button class="acct-btn" id="acctBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="acctMenu">
+          <span class="initials" id="myInitials" aria-hidden="true"></span><span class="acct-name" id="whoami"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+        </button>
+        <div class="acct-menu" id="acctMenu" role="menu" hidden>
+          <div class="acct-who"><b id="menuName"></b><span id="menuEmail"></span></div>
+          <a role="menuitem" href="#sharing" data-close-menu>People and sharing</a>
+          <button role="menuitem" type="button" id="menuSwitch">Switch build</button>
+          <hr>
+          <button role="menuitem" type="button" data-signout>Sign out</button>
+        </div>
+      </div>
     </div>
     <div class="title-row">
       <div>
         <h1 id="pname">House build</h1>
         <div class="addr" id="paddr">Hilo, Hawaiʻi</div>
       </div>
-      <button class="btn-link write" id="editProject" type="button">Edit project details</button>
+      <button class="head-btn write" id="editProject" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>Edit details</button>
     </div>
     <div class="vitals num" id="vitals"></div>
     <div class="strip" id="strip" aria-hidden="true"></div>

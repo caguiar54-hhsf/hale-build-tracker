@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 52" fill="none" stroke="#FFFFFF" stroke-opacity=".22" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round">
+  <!-- Low single-story hale elevation: hip-roof main house with a lanai, gable wing, and the ground line -->
+  <path d="M0 51H520"/>
+  <!-- main house -->
+  <path d="M168 51V27H352V51"/>
+  <path d="M150 28L196 9H324L370 28"/>
+  <path d="M150 28H370"/>
+  <!-- lanai posts and rail -->
+  <path d="M182 28V51M222 28V51M182 41H222"/>
+  <!-- door and windows -->
+  <path d="M244 51V34H260V51"/>
+  <path d="M276 33H306V44H276ZM291 33V44"/>
+  <path d="M320 33H340V44H320Z"/>
+  <!-- gable wing -->
+  <path d="M352 51V32H430V51"/>
+  <path d="M344 33L391 14L438 33"/>
+  <path d="M374 36H408V45H374ZM391 36V45"/>
+  <!-- steps -->
+  <path d="M196 51V47H208V51"/>
+</svg>

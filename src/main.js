@@ -1672,6 +1672,9 @@ async function startSignedIn(){
   try {
     me = session.user.id;
     $("#whoami").textContent = myName();
+    $("#menuName").textContent = session.user.user_metadata?.display_name || "Signed in";
+    $("#menuEmail").textContent = session.user.email || "";
+    $("#myInitials").textContent = (myName().trim().split(/[\s@.]+/).filter(Boolean).map(w=>w[0]).join("").slice(0,2) || "?").toUpperCase();
     // Supabase query builders are thenables without .catch, so errors come back in { error } instead
     const { error: invErr } = await supabase.rpc("accept_invites");
     if(invErr) console.warn("accept_invites:", invErr.message);
@@ -1705,3 +1708,14 @@ supabase.auth.onAuthStateChange((event, s) => {
   if(event==="SIGNED_OUT" || !s){ started = false; projectId = null; me = null; if(channel){ supabase.removeChannel(channel); channel = null; } showScreen("auth"); setAuthMode("signin"); if(linkError && event==="INITIAL_SESSION"){ $("#authErr").textContent = linkError; $("#authErr").hidden = false; } return; }
   if((event==="SIGNED_IN" || event==="INITIAL_SESSION") && !started && authMode!=="reset"){ started = true; setTimeout(startSignedIn, 0); }
 });
+
+/* account menu */
+(() => {
+  const btn = $("#acctBtn"), menu = $("#acctMenu");
+  const set = open => { menu.hidden = !open; btn.setAttribute("aria-expanded", String(open)); if(open) menu.querySelector("[role=menuitem]")?.focus(); };
+  btn.addEventListener("click", e => { e.stopPropagation(); set(menu.hidden); });
+  document.addEventListener("click", e => { if(!menu.hidden && !menu.contains(e.target)) set(false); });
+  document.addEventListener("keydown", e => { if(e.key==="Escape" && !menu.hidden){ set(false); btn.focus(); } });
+  menu.addEventListener("click", e => { if(e.target.closest("[data-close-menu],[data-signout]")) set(false); });
+  $("#menuSwitch").addEventListener("click", () => { set(false); showPicker(); });
+})();
