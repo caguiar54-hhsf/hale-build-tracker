@@ -14,7 +14,13 @@ const today = () => { const t=new Date(); t.setMinutes(t.getMinutes()-t.getTimez
 const S = { project:{}, phases:[], costs:[], log:[], contacts:[], selections:[], allowances:{},
   changes:[], draws:[], punch:[], documents:[], questions:[], vendors:[], loaded:false };
 let readOnly = false;
-const selFilter = { room:"all", cat:"all" };
+const selFilter = { room:"all", cat:"all", phase:"all", group:"room" };
+/* Best-guess phase for a selection type, matched on phase titles so it still works if phases are renamed */
+const SEL_PHASE_HINT = {"Lighting":/fixture|applian/i, "Plumbing fixtures":/fixture|applian/i, "Appliances":/applian|fixture/i,
+  "Cabinets":/finish|cabinet/i, "Countertops":/finish|counter|cabinet/i, "Flooring":/finish|floor/i, "Tile":/finish|tile|floor/i, "Hardware":/finish|fixture/i,
+  "Paint & finishes":/finish|paint/i, "Doors & windows":/window|door/i, "Exterior & lanai":/siding|exterior|lanai|roof/i};
+function guessPhase(cat){ const re = SEL_PHASE_HINT[cat]; const p = re && S.phases.find(x=>re.test(x.title)); return p ? p.id : ""; }
+const phaseOf = s => s.phaseId && S.phases.find(p=>p.id===s.phaseId);
 const ui = { punchList:"punch", qFilter:"open", docCat:"all", tlRange:"upcoming", spendBy:"category", costShow:"all", costCat:"all", costPhase:"all", vendTrade:"all" };
 const CO_ST = {proposed:"Proposed", approved:"Approved", rejected:"Rejected"};
 const CO_CLASS = {proposed:"active", approved:"done", rejected:"failed"};
@@ -262,6 +268,7 @@ function vOverview(){
 }
 const trunc = (s,n) => { s=String(s||""); return s.length>n ? s.slice(0,n-1)+"…" : s; };
 
+function selLink(p){ const n = S.selections.filter(x=>x.phaseId===p.id).length; return n ? ` · <a class="ext" href="#selections" data-act="phaseSels" data-id="${esc(p.id)}">${n} selection${n===1?"":"s"}</a>` : ""; }
 function phaseMoneyLine(p, g){
   const bud = +p.budget || 0;
   if(!bud && !g.n) return "";
@@ -272,7 +279,7 @@ function phaseMoneyLine(p, g){
     <div class="meter"><div style="width:${w(g.paid)}%;background:var(--good)"></div><div style="width:${w(g.held)}%;background:var(--held)"></div><div style="width:${w(g.owed+g.quoted)}%;background:var(--warn);opacity:.55"></div>${bud?`<i class="bud" style="left:${w(bud)}%" title="Budget ${money(bud)}"></i>`:""}</div>
     <div class="hint num">${money(g.paid)} paid${g.owed+g.held+g.quoted>0.004?` · ${money(g.owed+g.held+g.quoted)} owed or quoted`:""}${bud?` · budget ${money(bud)}`:""}
       ${over ? ` <span class="pill failed">Over by ${money(g.committed-bud)}</span>` : bud ? ` · <span style="color:var(--good)">${money(bud-g.committed)} left</span>` : ""}
-      ${g.n ? ` · <a class="ext" href="#budget" data-act="phaseCosts" data-id="${esc(p.id)}">${g.n} cost${g.n===1?"":"s"}</a>` : ""}</div>
+      ${g.n ? ` · <a class="ext" href="#budget" data-act="phaseCosts" data-id="${esc(p.id)}">${g.n} cost${g.n===1?"":"s"}</a>` : ""}${selLink(p)}</div>
   </div>`;
 }
 function vPhases(){
@@ -302,7 +309,7 @@ function vPhases(){
             ${p.start||p.end ? `<span class="mono">${fmtDate(p.start)||"?"} → ${fmtDate(p.end)||"?"}</span>`:""}
             ${p.inspection ? `<span>Inspection: ${esc(p.inspection)} <span class="pill ${esc(p.inspectionStatus||"none")}">${INSP[p.inspectionStatus||"none"]}${p.inspectionStatus==="scheduled"&&p.inspectionDate?" "+fmtDate(p.inspectionDate):""}</span></span>`:""}
           </div>
-          ${phaseMoneyLine(p, pm[p.id])}
+          ${phaseMoneyLine(p, pm[p.id]) || (S.selections.some(x=>x.phaseId===p.id) ? `<div class="pmoney"><div class="hint">${selLink(p).replace(/^ · /,"")}</div></div>` : "")}
           ${p.notes ? `<div class="notes">${esc(p.notes)}</div>`:""}
         </div>
         <div class="acts">
@@ -564,11 +571,17 @@ function vSelections(){
   const byCat = {}; committed.forEach(s => { const c = s.category||"Other"; byCat[c] = (byCat[c]||0) + selTotal(s); });
 
   const rooms = [...new Set(all.map(s=>s.room||"Unassigned"))].sort();
+  const usedPhases = S.phases.filter(p => all.some(s=>s.phaseId===p.id));
+  const noPhase = all.filter(s=>!phaseOf(s));
+  if(selFilter.phase!=="all" && selFilter.phase!=="none" && !usedPhases.some(p=>p.id===selFilter.phase)) selFilter.phase="all";
   const cats = [...new Set(all.map(s=>s.category||"Other"))].sort((a,b)=>CATS.indexOf(a)-CATS.indexOf(b));
   if(selFilter.room!=="all" && !rooms.includes(selFilter.room)) selFilter.room="all";
   if(selFilter.cat!=="all" && !cats.includes(selFilter.cat)) selFilter.cat="all";
-  const shown = all.filter(s => (selFilter.room==="all" || (s.room||"Unassigned")===selFilter.room) && (selFilter.cat==="all" || (s.category||"Other")===selFilter.cat));
-  const groups = {}; shown.forEach(s => (groups[s.room||"Unassigned"] ||= []).push(s));
+  const shown = all.filter(s => (selFilter.room==="all" || (s.room||"Unassigned")===selFilter.room) && (selFilter.cat==="all" || (s.category||"Other")===selFilter.cat)
+    && (selFilter.phase==="all" || (selFilter.phase==="none" ? !phaseOf(s) : s.phaseId===selFilter.phase)));
+  const groups = {}; const gkey = s => selFilter.group==="phase" ? (phaseOf(s)?.title || "No phase yet") : (s.room||"Unassigned");
+  shown.forEach(s => (groups[gkey(s)] ||= []).push(s));
+  const gorder = selFilter.group==="phase" ? Object.keys(groups).sort((a,b)=>{ const ia=S.phases.findIndex(p=>p.title===a), ib=S.phases.findIndex(p=>p.title===b); return (ia<0?999:ia)-(ib<0?999:ib); }) : Object.keys(groups).sort();
   const costIds = new Set(S.costs.map(c=>c.id));
 
   const card = s => {
@@ -582,6 +595,7 @@ function vSelections(){
         : `<div class="ph none"><span class="ct">${esc(s.category||"No photo")}</span></div>`}
       <div class="bd">
         <div class="hd"><span class="nm">${esc(s.item)}</span><span class="pill ${SEL_CLASS[s.status]??""}">${SEL_ST[s.status]||"Considering"}</span></div>
+        <div class="sub selph">${phaseOf(s) ? esc(phaseOf(s).title) : `<span style="color:var(--bad)">No phase yet</span>`}${selFilter.group==="phase" && s.room ? ` · ${esc(s.room)}` : ""}</div>
         ${s.brand||s.finish ? `<div class="sub">${esc([s.brand,s.finish].filter(Boolean).join(" · "))}</div>`:""}
         ${s.vendor ? `<div class="sub">From ${esc(s.vendor)}</div>`:""}
         <div class="price num">${s.price!==null&&s.price!==undefined&&s.price!=="" ? (qty!==1 ? `${money(s.price)} × ${qty} = <b>${money(selTotal(s))}</b>` : `<b>${money(s.price)}</b>`) : `<span class="empty">No price yet</span>`}</div>
@@ -613,13 +627,18 @@ function vSelections(){
       return `<div class="bar"><span class="nm">${esc(c)}</span><span class="track"><span style="width:${Math.min(u,a)/scale*100}%;background:var(--accent)"></span>${over?`<span style="width:${(u-a)/scale*100}%;background:var(--bad)"></span>`:""}</span><span class="amt" style="color:${over?"var(--bad)":"inherit"}">${money(u)} / ${money(a)}</span></div>`; }).join("")}
     </div><div class="legend" style="margin-top:10px"><span style="--c:var(--accent)">Chosen, ordered or installed</span><span style="--c:var(--bad)">Over allowance</span></div></div>` : ""}
   ${all.length ? `
+    ${noPhase.length ? `<div class="notice">${noPhase.length} item${noPhase.length>1?"s aren't":" isn't"} tied to a phase yet. <a class="ext" href="#selections" data-act="selNoPhase">Show ${noPhase.length>1?"them":"it"}</a>, then use Edit to pick one.</div>` : ""}
+    <div class="toolbar" style="margin-bottom:10px">
+      ${seg("selGroup",[["room","By room"],["phase","By phase"]])}
+      <label class="srcpick" for="selPhaseSel" style="margin:0"><span>Phase</span><select id="selPhaseSel">${[["all","All phases"], ...usedPhases.map(p=>[p.id,p.title]), ...(noPhase.length?[["none","No phase yet"]]:[])].map(([v,l])=>`<option value="${esc(v)}" ${v===selFilter.phase?"selected":""}>${esc(l)}</option>`).join("")}</select></label>
+    </div>
     <div class="chips" role="group" aria-label="Filter by room"><span class="label">Room</span>
       <button class="chip" data-act="fRoom" data-v="all" aria-pressed="${selFilter.room==="all"}">All</button>
       ${rooms.map(r=>`<button class="chip" data-act="fRoom" data-v="${esc(r)}" aria-pressed="${selFilter.room===r}">${esc(r)}</button>`).join("")}</div>
     <div class="chips" role="group" aria-label="Filter by category"><span class="label">Type</span>
       <button class="chip" data-act="fCat" data-v="all" aria-pressed="${selFilter.cat==="all"}">All</button>
       ${cats.map(c=>`<button class="chip" data-act="fCat" data-v="${esc(c)}" aria-pressed="${selFilter.cat===c}">${esc(c)}</button>`).join("")}</div>
-    ${Object.keys(groups).sort().map(r => `<h3 class="room-h"><span>${esc(r)}</span><span class="sum">${money(sum(groups[r].filter(s=>COMMITTED.has(s.status))))} chosen</span></h3>
+    ${gorder.map(r => `<h3 class="room-h"><span>${esc(r)}</span><span class="sum">${money(sum(groups[r].filter(s=>COMMITTED.has(s.status))))} chosen</span></h3>
       <div class="sel-grid">${groups[r].map(card).join("")}</div>`).join("") || `<p class="empty" style="margin-top:16px">No items match these filters.</p>`}`
   : `<div class="panel"><p class="empty" style="margin:0">Nothing here yet. Add the fixtures and finishes you're looking at: light fixtures, cabinets, faucets, tile, flooring, appliances. Attach photos, note the price and where to buy it, and mark it Chosen once you decide.</p></div>`}`;
 }
@@ -649,7 +668,7 @@ function strip(coll, rec){
   return `<div class="ministrip">${ids.map((p,i)=>`<button data-act="photo" data-coll="${coll}" data-id="${esc(rec.id)}" data-i="${i}" aria-label="Open photo ${i+1}"><img src="${blob(p)}" data-path="${esc(p)}" alt="" loading="lazy"></button>`).join("")}</div>`;
 }
 const pill = (cls, txt, act, id) => act && !readOnly ? `<button class="pill ${cls}" data-act="${act}" data-id="${esc(id)}" title="Tap to move to the next status">${txt}</button>` : `<span class="pill ${cls}">${txt}</span>`;
-const seg = (k, opts) => `<div class="seg" role="group">${opts.map(([v,l])=>`<button data-act="ui" data-k="${k}" data-v="${v}" aria-pressed="${ui[k]===v}">${l}</button>`).join("")}</div>`;
+const seg = (k, opts) => { const cur = k==="selGroup" ? selFilter.group : ui[k]; return `<div class="seg" role="group">${opts.map(([v,l])=>`<button data-act="ui" data-k="${k}" data-v="${v}" aria-pressed="${cur===v}">${l}</button>`).join("")}</div>`; };
 const phaseTitle = id => id ? (S.phases.find(p=>p.id===id)?.title || "") : "";
 const signed = n => (n<0?"−":"+") + money(Math.abs(n));
 
@@ -1004,10 +1023,14 @@ function vContacts(){
 const phaseOpts = () => [["","General"], ...S.phases.map(p=>[p.id,p.title])];
 const vendorNames = () => [...new Set([...S.costs.map(c=>c.vendor), ...S.contacts.map(c=>c.company), ...S.vendors.map(v=>v.name)].filter(Boolean))].sort();
 const FORMS = {
-  selections: { title:"Selection", coll:"selections", fields:[
+  selections: { title:"Selection", coll:"selections",
+    post:o=>{ const p = S.phases.find(x=>x.id===o.phaseId);   // suggest an order-by date from the phase start and lead time
+      if(!o.orderBy && p?.start && +o.leadWeeks){ const d = new Date(p.start+"T12:00:00"); d.setDate(d.getDate() - Math.round(+o.leadWeeks*7)); o.orderBy = d.toISOString().slice(0,10); } },
+    fields:[
     {k:"item",l:"Item",full:1,req:1,ph:"e.g. Pendant lights over island"},
     {k:"room",l:"Room",list:ROOMS,ph:"e.g. Kitchen"},
     {k:"category",l:"Type",t:"select",o:CATS.map(c=>[c,c])},
+    {k:"phaseId",l:"Phase",t:"select",req:1,o:()=>[["","Choose the phase it's for"], ...S.phases.map(p=>[p.id,p.title])]},
     {k:"status",l:"Status",t:"select",o:Object.entries(SEL_ST)},
     {k:"brand",l:"Brand / model",ph:"e.g. Kichler 43863"},
     {k:"finish",l:"Finish, color or size",ph:"e.g. Brushed brass, 12\""},
@@ -1139,7 +1162,8 @@ function openForm(kind, id, preset){
   const rec = F.single ? S[kind==="project"?"project":"allowances"] : (id ? S[kind].find(x=>x.id===id) : null) || preset || {};
   const isNew = !F.single && !id;
   const defaults = {phases:{status:"todo",inspectionStatus:"none",order:(S.phases.at(-1)?.order||0)+1}, costs:{status:"committed",date:today(),category:ui.costCat!=="all"&&COST_CATS.includes(ui.costCat)?ui.costCat:""}, log:{date:today()},
-    selections:{status:"considering",qty:1,category:selFilter.cat!=="all"?selFilter.cat:"Lighting",room:selFilter.room!=="all"&&selFilter.room!=="Unassigned"?selFilter.room:""},
+    selections:(()=>{ const cat = selFilter.cat!=="all"?selFilter.cat:"Lighting"; return {status:"considering",qty:1,category:cat,room:selFilter.room!=="all"&&selFilter.room!=="Unassigned"?selFilter.room:"",
+      phaseId: selFilter.phase!=="all"&&selFilter.phase!=="none" ? selFilter.phase : guessPhase(cat)}; })(),
     changes:{status:"proposed",number:Math.max(0,...S.changes.map(c=>+c.number||0))+1,date:today(),requestedBy:"Owner"},
     draws:{status:"upcoming",number:Math.max(0,...S.draws.map(d=>+d.number||0))+1},
     punch:{status:"open",list:ui.punchList,found:today()},
@@ -1231,6 +1255,11 @@ function openForm(kind, id, preset){
     try { const r = await assets.upload(file); if(isAsset(r.id)){ fileObj = {id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}; drawFile(); msg.textContent = "Uploaded. Save to keep it."; } }
     catch(e){ msg.textContent = ({unsupported_type:"That file type isn't supported. Use a PDF, JPG, PNG or WebP.", too_large:"That file is over 20 MB.", quota_or_state:"File storage is full. Remove some old files first.", rate_limited:"Too many uploads at once. Wait a moment and try again.", not_granted:"File uploads need Editor access to this page."})[e?.code] || "Couldn't upload that file. Try again."; }
   };
+  if(kind==="selections"){
+    const catSel = form.elements.namedItem("category"), phSel = form.elements.namedItem("phaseId"); let phTouched = !!phSel.value && !isNew;
+    phSel.addEventListener("change", () => { phTouched = true; });
+    catSel.addEventListener("change", () => { if(!phTouched){ const g = guessPhase(catSel.value); if(g) phSel.value = g; } });
+  }
   setTimeout(()=>form.querySelector("input:not([type=file]),textarea,select")?.focus(),0);
   const close = () => { scrim.hidden = true; scrim.innerHTML = ""; };
   $("#cancelBtn").onclick = close;
@@ -1303,7 +1332,9 @@ document.addEventListener("click", async e => {
   if(act==="fRoom"){ selFilter.room = t.dataset.v; render(); return; }
   if(act==="fCat"){ selFilter.cat = t.dataset.v; render(); return; }
   if(act==="photo"){ openLightbox(t.dataset.coll||"selections", id, t.dataset.i); return; }
-  if(act==="ui"){ ui[t.dataset.k] = t.dataset.v; render(); return; }
+  if(act==="ui"){ if(t.dataset.k==="selGroup") selFilter.group = t.dataset.v; else ui[t.dataset.k] = t.dataset.v; render(); return; }
+  if(act==="selNoPhase"){ e.preventDefault(); selFilter.phase = "none"; selFilter.room = "all"; selFilter.cat = "all"; render(); return; }
+  if(act==="phaseSels"){ e.preventDefault(); selFilter.phase = id; selFilter.room = "all"; selFilter.cat = "all"; selFilter.group = "room"; if(location.hash!=="#selections") location.hash = "#selections"; else render(); return; }
   if(act==="costDetail"){ openCostDetail(id); return; }
   if(act==="drawPacket"){ openDrawPacket(id); return; }
   if(act==="phaseCosts"){ e.preventDefault(); ui.costPhase = id ? id : "none"; ui.costCat = "all"; ui.costShow = "all"; ui.spendBy = "phase"; if(location.hash!=="#budget") location.hash = "#budget"; else render(); return; }
@@ -1344,7 +1375,7 @@ document.addEventListener("click", async e => {
     const s = S.selections.find(x=>x.id===id); if(!s) return;
     t.disabled = true; t.textContent = "Adding…";
     const cid = newId("costs");
-    let err = await save(`costs/${cid}`, {item: s.item + (s.room?` (${s.room})`:""), vendor: s.vendor||"", amount: selTotal(s), category: s.category==="Appliances"||s.category==="Plumbing fixtures"||s.category==="Lighting" ? "Appliances & fixtures" : "Materials", status: ["chosen","ordered","delivered","installed"].includes(s.status) ? "committed" : "estimate", date: today(), phaseId:"", notes:"Added from Selections", selectionId: s.id, createdAt: new Date().toISOString()});
+    let err = await save(`costs/${cid}`, {item: s.item + (s.room?` (${s.room})`:""), vendor: s.vendor||"", amount: selTotal(s), category: s.category==="Appliances"||s.category==="Plumbing fixtures"||s.category==="Lighting" ? "Appliances & fixtures" : "Materials", status: ["chosen","ordered","delivered","installed"].includes(s.status) ? "committed" : "estimate", date: today(), phaseId: phaseOf(s) ? s.phaseId : "", notes:"Added from Selections", selectionId: s.id, createdAt: new Date().toISOString()});
     if(!err){ const {id:_, ...body} = s; err = await save(`selections/${id}`, {...body, costId: cid}); }
     if(err){ showNotice(err); t.disabled=false; t.textContent="Add to budget"; }
   }
@@ -1373,7 +1404,8 @@ document.addEventListener("click", async e => {
   }
 });
 $("#editProject").addEventListener("click", ()=>openForm("project"));
-document.addEventListener("change", e => { if(e.target.id==="costPhaseSel"){ ui.costPhase = e.target.value; render(); } });
+document.addEventListener("change", e => { if(e.target.id==="costPhaseSel"){ ui.costPhase = e.target.value; render(); }
+  if(e.target.id==="selPhaseSel"){ selFilter.phase = e.target.value; render(); } });
 document.addEventListener("error", e => {
   const img = e.target; if(!(img instanceof HTMLImageElement) || img.dataset.failed) return;
   img.dataset.failed = "1"; img.removeAttribute("src"); img.alt = "Photo unavailable";
