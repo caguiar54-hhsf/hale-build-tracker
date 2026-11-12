@@ -11,7 +11,7 @@ const S = { project:{}, phases:[], costs:[], log:[], contacts:[], selections:[],
   changes:[], draws:[], punch:[], documents:[], questions:[], vendors:[], loaded:false };
 let readOnly = false;
 const selFilter = { room:"all", cat:"all" };
-const ui = { punchList:"punch", qFilter:"open", docCat:"all", tlRange:"upcoming", spendBy:"category", costShow:"all", costCat:"all", costPhase:"all" };
+const ui = { punchList:"punch", qFilter:"open", docCat:"all", tlRange:"upcoming", spendBy:"category", costShow:"all", costCat:"all", costPhase:"all", vendTrade:"all" };
 const CO_ST = {proposed:"Proposed", approved:"Approved", rejected:"Rejected"};
 const CO_CLASS = {proposed:"active", approved:"done", rejected:"failed"};
 const DRAW_ST = {upcoming:"Upcoming", requested:"Requested", inspected:"Lender inspected", funded:"Funded"};
@@ -43,6 +43,16 @@ function srcOf(p){
   if(typeof p.source==="string" && p.source.startsWith("draw:")){ const id = p.source.slice(5); return S.draws.some(d=>d.id===id) ? {type:"draw", id} : {type:"loan"}; }
   if(p.method==="Loan draw") return {type:"loan"};
   return {type:"unset"};
+}
+const VENDOR_TRADES = ["General contractor","Excavation & grading","Concrete & foundation","Framing","Roofing","Electrical","Plumbing","Septic / wastewater","HVAC & solar","Windows & doors","Insulation & drywall","Painting","Flooring & tile","Cabinets & countertops","Landscaping","Architect / designer","Engineer","Surveyor","Building supplier","Equipment rental","Other"];
+/* A vendor record's id may be a slug of its name (created from a cost) or a random id (added by hand);
+   costs are matched to vendor records by name either way. */
+function vendorKey(name){ const k = slug(name); const v = S.vendors.find(x => x.id===k || slug(x.name)===k); return v ? v.id : k; }
+function insState(v){
+  if(!v?.insuranceExp) return null; const d = daysTo(v.insuranceExp);
+  if(d < 0) return ["failed", `Insurance expired ${fmtDate(v.insuranceExp)}`];
+  if(d <= 30) return ["scheduled", `Insurance expires in ${d} day${d===1?"":"s"}`];
+  return ["done", `Insured until ${fmtDate(v.insuranceExp)}`];
 }
 const drawLabel = d => `Draw ${d.number??""}${d.milestone?` · ${d.milestone}`:""}`;
 function srcLabel(p){ const s = srcOf(p); if(s.type==="own") return "Own money"; if(s.type==="draw"){ const d = S.draws.find(x=>x.id===s.id); return d ? drawLabel(d) : "Loan"; } if(s.type==="loan") return "Loan (draw not chosen)"; return "Source not set"; }
@@ -201,6 +211,7 @@ function vOverview(){
   S.draws.forEach(d => { const over = dsp[d.id].spent - (+d.amount||0); if(over > 0.004) attention.push([`${drawLabel(d)}: ${money(over)} more paid than the draw amount`,"draws"]);
     else if(dsp[d.id].spent > 0 && d.status!=="funded") attention.push([`${drawLabel(d)}: payments recorded before the draw is funded`,"draws"]); });
   const pmA = phaseMoney(); S.phases.forEach(p => { const over = pmA[p.id].committed - (+p.budget||0); if(+p.budget && over > 0.004) attention.push([`${p.title} is ${money(over)} over its budget`,"phases"]); });
+  const insN = S.vendors.filter(v => { const st = insState(v); return st && st[0]==="failed"; }).length; if(insN) attention.push([`${insN} vendor${insN>1?"s'":"'s"} insurance has expired`,"vendors"]);
   const fs = fundingSplit(); if(fs.nUnset && S.draws.length) attention.push([`${fs.nUnset} payment${fs.nUnset>1?"s don't":" doesn't"} say if it came from the loan or your own money`,"budget"]);
   const nP = S.punch.filter(p=>p.status==="open").length; if(nP) attention.push([`${nP} open punch list item${nP>1?"s":""}`,"punch"]);
   const failed = S.phases.filter(p=>p.inspectionStatus==="failed").length; if(failed) attention.push([`${failed} failed inspection${failed>1?"s":""} to re-schedule`,"phases"]);
@@ -762,7 +773,7 @@ function packetData(d){
   const ph = d.phaseId ? S.phases.find(p=>p.id===d.phaseId) : null;
   const items = [...sp.items].sort((a,b)=>String(a.p.date).localeCompare(String(b.p.date)));
   const phaseCosts = ph ? S.costs.filter(c=>c.phaseId===ph.id).map(c=>({c, m:costMath(c)})) : [];
-  const vend = {}; items.forEach(({c})=>{ const n=(c.vendor||"").trim(); if(n) vend[slug(n)] = n; });
+  const vend = {}; items.forEach(({c})=>{ const n=(c.vendor||"").trim(); if(n) vend[vendorKey(n)] = n; });
   const liens = Object.entries(vend).map(([k,n]) => ({name:n, ok: !!S.vendors.find(v=>v.id===k)?.lienRelease, date: S.vendors.find(v=>v.id===k)?.lienDate||""}));
   const receipts = []; const seen = new Set();
   items.forEach(({c}) => (c.receipts||[]).forEach(r => { if(r && isAsset(r.id) && !seen.has(r.id)){ seen.add(r.id); receipts.push({...r, item:c.item, vendor:c.vendor||""}); } }));
@@ -860,27 +871,41 @@ async function printPacket(d){
 
 function vVendors(){
   const map = {};
-  S.costs.forEach(c => { const n=(c.vendor||"").trim(); if(!n) return; const k=slug(n); const m = costMath(c); const v = (map[k] ||= {name:n, paid:0, owed:0, held:0, n:0, due:null});
+  S.vendors.forEach(v => { map[v.id] = {name:v.name||v.id, paid:0, owed:0, held:0, n:0, due:null, doc:v}; });
+  S.costs.forEach(c => { const n=(c.vendor||"").trim(); if(!n) return; const k = vendorKey(n); const m = costMath(c); const v = (map[k] ||= {name:n, paid:0, owed:0, held:0, n:0, due:null});
     v.paid += m.paid; v.held += m.held; v.owed += m.balance - m.held; v.n++; if(m.state!=="quote" && m.balance - m.held > 0 && c.due && (!v.due || c.due<v.due)) v.due = c.due; });
-  S.vendors.forEach(v => { const k = v.id; (map[k] ||= {name:v.name||k, paid:0, owed:0, held:0, n:0, due:null}); map[k].doc = v; });
-  const list = Object.entries(map).sort((a,b)=>(b[1].paid+b[1].owed)-(a[1].paid+a[1].owed));
-  const missing = list.filter(([k,v])=>v.paid>0 && !v.doc?.lienRelease).length;
+  let list = Object.entries(map);
+  const trades = [...new Set(list.map(([,v])=>v.doc?.trade).filter(Boolean))].sort();
+  if(ui.vendTrade!=="all" && !trades.includes(ui.vendTrade)) ui.vendTrade = "all";
+  if(ui.vendTrade!=="all") list = list.filter(([,v])=>v.doc?.trade===ui.vendTrade);
+  list.sort((a,b)=>(b[1].paid+b[1].owed)-(a[1].paid+a[1].owed) || a[1].name.localeCompare(b[1].name));
+  const missing = Object.values(map).filter(v=>v.paid>0 && !v.doc?.lienRelease).length;
+  const insBad = Object.values(map).filter(v=>{ const st = insState(v.doc); return st && st[0]!=="done"; }).length;
   const contactFor = n => S.contacts.find(c => slug(c.company)===slug(n) || slug(c.name)===slug(n));
   return `
-  <div class="viewhead"><h2>Vendors & subs</h2></div>
-  <p class="hint" style="margin:-4px 0 14px;max-width:62ch">Built from the vendor names on your costs. When a sub or supplier is paid, ask for a signed lien release. It protects your friends if the contractor doesn't pay someone. Store the release under Files, then check it off here.</p>
+  <div class="viewhead"><h2>Vendors & subs</h2><button class="btn primary write" data-act="add" data-kind="vendors">Add vendor</button></div>
+  <p class="hint" style="margin:-4px 0 14px;max-width:66ch">Add the contractors, subs and suppliers you're working with, or they'll appear automatically from the vendor names on your costs. When someone is paid, ask for a signed lien release: it protects your friends if the contractor doesn't pay a sub.</p>
   ${missing?`<div class="notice">${missing} paid vendor${missing>1?"s":""} without a lien release on file.</div>`:""}
-  <div class="panel" style="padding-block:2px"><div class="rows">
-    ${list.length ? list.map(([k,v])=>{ const ct = contactFor(v.name); return `<div class="row"><div style="min-width:0">
-        <div class="t">${esc(v.name)}</div>
-        <div class="meta"><span>${v.n} cost${v.n===1?"":"s"}</span>${ct?.phone?`<span class="mono">${esc(ct.phone)}</span>`:""}${v.due?`<span style="color:${daysTo(v.due)<=7?"var(--bad)":"inherit"}">Next payment due ${fmtDate(v.due)}</span>`:""}</div>
-        <label class="check" style="margin-top:8px"><input type="checkbox" data-act="lien" data-k="${esc(k)}" data-name="${esc(v.name)}" ${v.doc?.lienRelease?"checked":""} ${readOnly?"disabled":""}> Lien release received${v.doc?.lienDate?` · ${fmtDate(v.doc.lienDate)}`:""}</label>
+  ${insBad?`<div class="notice" style="margin-top:${missing?"8px":"0"}">${insBad} vendor${insBad>1?"s have":" has"} insurance that's expired or expiring within 30 days. Ask for a new certificate.</div>`:""}
+  ${trades.length>1 ? `<div class="chips" style="margin:${missing||insBad?"14px":"0"} 0 12px" role="group" aria-label="Filter by trade"><button class="chip" data-act="ui" data-k="vendTrade" data-v="all" aria-pressed="${ui.vendTrade==="all"}">All trades</button>${trades.map(t=>`<button class="chip" data-act="ui" data-k="vendTrade" data-v="${esc(t)}" aria-pressed="${ui.vendTrade===t}">${esc(t)}</button>`).join("")}</div>` : ""}
+  <div class="panel" style="padding-block:2px;${missing||insBad?"margin-top:14px":""}"><div class="rows">
+    ${list.length ? list.map(([k,v])=>{ const d = v.doc||{}; const ct = contactFor(v.name); const phone = d.phone || ct?.phone; const email = d.email || ct?.email; const ins = insState(d); const nf = (d.files||[]).length;
+      return `<div class="row"><div style="min-width:0">
+        <div class="t">${esc(v.name)}${d.trade?` <span class="trade">${esc(d.trade)}</span>`:""}</div>
+        <div class="meta">${d.contactName?`<span>${esc(d.contactName)}</span>`:""}${phone?`<span class="mono copyable">${esc(phone)}</span>`:""}${email?`<span class="copyable">${esc(email)}</span>`:""}${d.license?`<span>License ${esc(d.license)}</span>`:""}</div>
+        <div class="meta">${v.n?`<span>${v.n} cost${v.n===1?"":"s"}</span>`:""}${v.due?`<span style="color:${daysTo(v.due)<=7?"var(--bad)":"inherit"}">Next payment due ${fmtDate(v.due)}</span>`:""}${d.w9==="yes"?`<span>W-9 on file</span>`:""}${nf?`<span>${nf} document${nf===1?"":"s"}</span>`:""}</div>
+        ${ins?`<div style="margin-top:6px"><span class="pill ${ins[0]}">${esc(ins[1])}</span></div>`:""}
+        ${d.notes?`<div class="txt">${esc(trunc(d.notes,160))}</div>`:""}
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-top:8px">
+          <label class="check"><input type="checkbox" data-act="lien" data-k="${esc(k)}" data-name="${esc(v.name)}" ${d.lienRelease?"checked":""} ${readOnly?"disabled":""}> Lien release received${d.lienDate?` · ${fmtDate(d.lienDate)}`:""}</label>
+          <button class="iconbtn write" style="padding-left:0" data-act="editVendor" data-k="${esc(k)}" data-name="${esc(v.name)}">${v.doc?"Edit":"Add details"}</button>
+        </div>
       </div><div class="side">
-        <span class="amt">${money(v.paid)}</span><span class="hint">paid</span>
+        ${v.n ? `<span class="amt">${money(v.paid)}</span><span class="hint">paid</span>
         ${v.held?`<span class="amt" style="color:var(--accent)">${money(v.held)}</span><span class="hint">retainage held</span>`:""}
-        ${v.owed>0.004?`<span class="amt" style="color:var(--warn)">${money(v.owed)}</span><span class="hint">owed or quoted</span>`:""}
+        ${v.owed>0.004?`<span class="amt" style="color:var(--warn)">${money(v.owed)}</span><span class="hint">owed or quoted</span>`:""}` : `<span class="hint">No costs yet</span>`}
       </div></div>`; }).join("")
-    : `<p class="empty" style="padding:14px 0">No vendors yet. Add costs with a vendor name on the Budget tab and they'll be grouped here.</p>`}
+    : `<p class="empty" style="padding:14px 0">${ui.vendTrade!=="all" ? "No vendors in this trade." : "No vendors yet. Tap Add vendor to save a contractor's contact details, license and insurance, or add costs with a vendor name and they'll show up here."}</p>`}
   </div></div>`;
 }
 
@@ -1071,6 +1096,24 @@ const FORMS = {
     {k:"status",l:"Status",t:"select",o:[["open","Open"],["answered","Answered"]]},
     {k:"answer",l:"Answer",t:"textarea",full:1,ph:"What the contractor said. Adding an answer marks it answered."},
     {k:"answeredDate",l:"Answered on",t:"date"}]},
+  vendors: { title:"Vendor", coll:"vendors",
+    after: async (o, before) => {   // renaming a vendor renames it on its costs too
+      const oldK = slug(before?.name), newName = o.name;
+      if(!before?.name || slug(newName)===oldK) return;
+      for(const c of S.costs.filter(c => slug(c.vendor)===oldK)){ const {id:cid, ...body} = c; await save(`costs/${cid}`, {...body, vendor:newName}); }
+    },
+    check:(o, isNew, id) => { const k = slug(o.name); const dup = S.vendors.find(v => v.id!==id && (slug(v.name)===k || v.id===k)); return dup ? `${dup.name} is already on the vendor list.` : null; },
+    fields:[
+    {k:"name",l:"Company or name",full:1,req:1,ph:"e.g. Big Island Framers"},
+    {k:"trade",l:"Trade",list:VENDOR_TRADES,ph:"e.g. Framing"},
+    {k:"contactName",l:"Contact person"},
+    {k:"phone",l:"Phone",t:"tel",ph:"808-"},
+    {k:"email",l:"Email",t:"email"},
+    {k:"license",l:"Contractor license no.",ph:"e.g. C-12345 (Hawaiʻi DCCA)"},
+    {k:"insuranceExp",l:"Insurance expires",t:"date"},
+    {k:"w9",l:"W-9 on file",t:"select",o:[["","Not yet"],["yes","Yes"]]},
+    {k:"files",l:"Contract, insurance certificate, W-9",t:"files",full:1,btn:"Add document"},
+    {k:"notes",l:"Notes",t:"textarea",full:1,ph:"Scope of work, payment terms, how they prefer to be contacted…"}]},
   documents: { title:"Document", coll:"documents", fields:[
     {k:"title",l:"Title",full:1,req:1,ph:"e.g. Building permit"},
     {k:"category",l:"Type",t:"select",o:DOC_CATS.map(c=>[c,c])},
@@ -1086,10 +1129,10 @@ const FORMS = {
     {k:"notes",l:"Notes",t:"textarea",full:1}]},
 };
 
-function openForm(kind, id){
+function openForm(kind, id, preset){
   if(readOnly) return;
   const F = FORMS[kind];
-  const rec = F.single ? S[kind==="project"?"project":"allowances"] : (id ? S[kind].find(x=>x.id===id) : null) || {};
+  const rec = F.single ? S[kind==="project"?"project":"allowances"] : (id ? S[kind].find(x=>x.id===id) : null) || preset || {};
   const isNew = !F.single && !id;
   const defaults = {phases:{status:"todo",inspectionStatus:"none",order:(S.phases.at(-1)?.order||0)+1}, costs:{status:"committed",date:today(),category:ui.costCat!=="all"&&COST_CATS.includes(ui.costCat)?ui.costCat:""}, log:{date:today()},
     selections:{status:"considering",qty:1,category:selFilter.cat!=="all"?selFilter.cat:"Lighting",room:selFilter.room!=="all"&&selFilter.room!=="Unassigned"?selFilter.room:""},
@@ -1115,7 +1158,7 @@ function openForm(kind, id){
       }
       if(f.t==="files"){
         return `<div class="field full"><span class="label">${esc(f.l)}</span><div class="thumbs" id="filesBox"></div>
-          <label class="btn upl" for="filesIn">Add receipt or invoice<input type="file" id="filesIn" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label>
+          <label class="btn upl" for="filesIn">${esc(f.btn||"Add receipt or invoice")}<input type="file" id="filesIn" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label>
           <div class="hint" id="filesMsg" aria-live="polite">Photo or PDF, up to 20 MB each.</div></div>`;
       }
       if(f.t==="file"){
@@ -1209,6 +1252,7 @@ function openForm(kind, id){
       if(f.t==="number" && raw!=="" && isNaN(Number(raw))){ showErr(`${f.l} should be a number.`); form.elements.namedItem(f.k).focus(); return; }
       out[f.k] = f.t==="number" ? (raw==="" ? null : Number(raw)) : raw;
     }
+    if(F.check){ const msg = F.check(out, isNew, id); if(msg){ showErr(msg); return; } }
     if(F.post) F.post(out);
     if(kind==="log" && isNew && me) out.author = me;
     if(isNew) out.createdAt = new Date().toISOString();
@@ -1216,6 +1260,7 @@ function openForm(kind, id){
     const path = F.single ? F.path() : `${F.coll}/${isNew ? newId(F.coll) : id}`;
     const err = await save(path, out);
     if(!err && kind==="project") await syncProjectName(out.name);
+    if(!err && F.after) await F.after(out, rec);
     if(err){ showErr(err); btn.disabled=false; btn.textContent="Save"; } else close();
   };
 }
@@ -1274,6 +1319,7 @@ document.addEventListener("click", async e => {
   else if(act==="project") openForm("project");
   else if(act==="drawNext") advance("draws", DRAW_ST, o => { if(o.status==="upcoming"){ o.requestedDate=""; o.fundedDate=""; } if(o.status==="requested" && !o.requestedDate) o.requestedDate=today(); if(o.status==="funded" && !o.fundedDate) o.fundedDate=today(); });
   else if(act==="punchNext") advance("punch", PUNCH_ST);
+  else if(act==="editVendor") openForm("vendors", t.dataset.k, {name: t.dataset.name});
   else if(act==="lien"){
     const k = t.dataset.k; const cur = S.vendors.find(v=>v.id===k) || {}; const {id:_, ...body} = cur;
     const err = await save(`vendors/${k}`, {...body, name: body.name || t.dataset.name, lienRelease: t.checked, lienDate: t.checked ? today() : ""});
