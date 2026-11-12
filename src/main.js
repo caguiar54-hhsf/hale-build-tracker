@@ -11,7 +11,7 @@ const S = { project:{}, phases:[], costs:[], log:[], contacts:[], selections:[],
   changes:[], draws:[], punch:[], documents:[], questions:[], vendors:[], loaded:false };
 let readOnly = false;
 const selFilter = { room:"all", cat:"all" };
-const ui = { punchList:"punch", qFilter:"open", docCat:"all", tlRange:"upcoming", spendBy:"category", costShow:"all", costCat:"all" };
+const ui = { punchList:"punch", qFilter:"open", docCat:"all", tlRange:"upcoming", spendBy:"category", costShow:"all", costCat:"all", costPhase:"all" };
 const CO_ST = {proposed:"Proposed", approved:"Approved", rejected:"Rejected"};
 const CO_CLASS = {proposed:"active", approved:"done", rejected:"failed"};
 const DRAW_ST = {upcoming:"Upcoming", requested:"Requested", inspected:"Lender inspected", funded:"Funded"};
@@ -83,7 +83,7 @@ function hideNotice(){ $("#notice").hidden=true; }
    balance = still owed overall (amount - paid), which includes held retainage */
 function payList(c){
   if(Array.isArray(c.payments) && c.payments.length) return c.payments;
-  if(c.status==="paid" && +c.amount) return [{id:"legacy", date:c.date||"", kind:"payment", amount:+c.amount, retained:0, method:"", note:"Marked paid in full", legacy:true}];
+  if(c.status==="paid" && +c.amount) return [{id:"legacy", date:c.date||"", kind:"payment", amount:+c.amount, retained:0, method:"", note:"Marked paid in full", legacy:true, ...(c.paidFrom?{source:c.paidFrom}:{})}];
   return [];
 }
 function costMath(c){
@@ -105,6 +105,15 @@ function totals(){
     committed += Math.max(m.amt, m.paid); });
   const budget = +S.project.budget || 0;
   return {paid, held, owed, quoted, est: owed+quoted, budget, committed, left: budget - committed};
+}
+/* Money per phase. committed = what the phase will cost as things stand (contracts, orders, quotes, or more if overpaid). */
+function phaseMoney(){
+  const map = {}; const blank = () => ({paid:0, held:0, owed:0, quoted:0, committed:0, n:0});
+  S.phases.forEach(p => map[p.id] = blank()); map[""] = blank();
+  S.costs.forEach(c => { const k = c.phaseId && map[c.phaseId] ? c.phaseId : ""; const m = costMath(c); const g = map[k];
+    g.paid += m.paid; g.held += m.held; g.n++; g.committed += Math.max(m.amt, m.paid);
+    if(m.state==="quote") g.quoted += m.balance; else g.owed += Math.max(0, m.balance - m.held); });
+  return map;
 }
 function daysTo(d){ if(!d) return null; return Math.round((new Date(d+"T12:00:00") - new Date(today()+"T12:00:00"))/864e5); }
 
@@ -191,6 +200,7 @@ function vOverview(){
   const dsp = drawSpend();
   S.draws.forEach(d => { const over = dsp[d.id].spent - (+d.amount||0); if(over > 0.004) attention.push([`${drawLabel(d)}: ${money(over)} more paid than the draw amount`,"draws"]);
     else if(dsp[d.id].spent > 0 && d.status!=="funded") attention.push([`${drawLabel(d)}: payments recorded before the draw is funded`,"draws"]); });
+  const pmA = phaseMoney(); S.phases.forEach(p => { const over = pmA[p.id].committed - (+p.budget||0); if(+p.budget && over > 0.004) attention.push([`${p.title} is ${money(over)} over its budget`,"phases"]); });
   const fs = fundingSplit(); if(fs.nUnset && S.draws.length) attention.push([`${fs.nUnset} payment${fs.nUnset>1?"s don't":" doesn't"} say if it came from the loan or your own money`,"budget"]);
   const nP = S.punch.filter(p=>p.status==="open").length; if(nP) attention.push([`${nP} open punch list item${nP>1?"s":""}`,"punch"]);
   const failed = S.phases.filter(p=>p.inspectionStatus==="failed").length; if(failed) attention.push([`${failed} failed inspection${failed>1?"s":""} to re-schedule`,"phases"]);
@@ -237,13 +247,36 @@ function vOverview(){
 }
 const trunc = (s,n) => { s=String(s||""); return s.length>n ? s.slice(0,n-1)+"…" : s; };
 
+function phaseMoneyLine(p, g){
+  const bud = +p.budget || 0;
+  if(!bud && !g.n) return "";
+  const over = bud && g.committed > bud + 0.004;
+  const scale = Math.max(bud, g.committed, 1);
+  const w = x => (x/scale*100).toFixed(2);
+  return `<div class="pmoney">
+    <div class="meter"><div style="width:${w(g.paid)}%;background:var(--good)"></div><div style="width:${w(g.held)}%;background:var(--accent)"></div><div style="width:${w(g.owed+g.quoted)}%;background:var(--warn);opacity:.55"></div>${bud?`<i class="bud" style="left:${w(bud)}%" title="Budget ${money(bud)}"></i>`:""}</div>
+    <div class="hint num">${money(g.paid)} paid${g.owed+g.held+g.quoted>0.004?` · ${money(g.owed+g.held+g.quoted)} owed or quoted`:""}${bud?` · budget ${money(bud)}`:""}
+      ${over ? ` <span class="pill failed">Over by ${money(g.committed-bud)}</span>` : bud ? ` · <span style="color:var(--good)">${money(bud-g.committed)} left</span>` : ""}
+      ${g.n ? ` · <a class="ext" href="#budget" data-act="phaseCosts" data-id="${esc(p.id)}">${g.n} cost${g.n===1?"":"s"}</a>` : ""}</div>
+  </div>`;
+}
 function vPhases(){
+  const pm = phaseMoney();
+  const phaseBud = S.phases.reduce((a,p)=>a+(+p.budget||0),0);
+  const projBud = +S.project.budget || 0;
+  const committed = S.phases.reduce((a,p)=>a+pm[p.id].committed,0) + pm[""].committed;
+  const overN = S.phases.filter(p => +p.budget && pm[p.id].committed > +p.budget + 0.004).length;
   return `
   <div class="viewhead"><h2>Build phases</h2>
     <div style="display:flex;gap:8px">
       ${!S.phases.length ? `<button class="btn write" data-act="template">Load standard Hilo build phases</button>`:""}
       <button class="btn primary write" data-act="addPhase">Add phase</button>
     </div></div>
+  ${S.phases.length && (phaseBud || committed) ? `<div class="tiles">
+    <div class="tile"><div class="label">Phase budgets</div><div class="v num">${phaseBud?money(phaseBud):"—"}</div><div class="hint">${!phaseBud ? "Tap Edit on a phase to set one" : projBud ? (Math.abs(phaseBud-projBud)<0.5 ? "Matches the total budget" : phaseBud>projBud ? `${money(phaseBud-projBud)} more than the total budget` : `${money(projBud-phaseBud)} of the total budget not assigned`) : "Total budget not set"}</div></div>
+    <div class="tile" style="border-top-color:var(--good)"><div class="label">Paid on phases</div><div class="v num">${money(S.phases.reduce((a,p)=>a+pm[p.id].paid,0))}</div><div class="hint">${pm[""].n?`Plus ${money(pm[""].paid)} on costs with no phase`:"All costs have a phase"}</div></div>
+    <div class="tile" style="border-top-color:${overN?"var(--bad)":"var(--good)"}"><div class="label">Phases over budget</div><div class="v num" style="color:${overN?"var(--bad)":"inherit"}">${overN}</div><div class="hint">${overN?"Counting contracts and quotes":"None so far"}</div></div>
+  </div>` : ""}
   <div class="panel" style="padding-block:4px">
     ${S.phases.length ? S.phases.map((p,i)=>`
       <div class="phase">
@@ -254,6 +287,7 @@ function vPhases(){
             ${p.start||p.end ? `<span class="mono">${fmtDate(p.start)||"?"} → ${fmtDate(p.end)||"?"}</span>`:""}
             ${p.inspection ? `<span>Inspection: ${esc(p.inspection)} <span class="pill ${esc(p.inspectionStatus||"none")}">${INSP[p.inspectionStatus||"none"]}${p.inspectionStatus==="scheduled"&&p.inspectionDate?" "+fmtDate(p.inspectionDate):""}</span></span>`:""}
           </div>
+          ${phaseMoneyLine(p, pm[p.id])}
           ${p.notes ? `<div class="notes">${esc(p.notes)}</div>`:""}
         </div>
         <div class="acts">
@@ -263,7 +297,8 @@ function vPhases(){
       </div>`).join("")
     : `<p class="empty" style="padding:14px 0">No phases yet. Load the standard list for a Hawaiʻi County house build, or add your own.</p>`}
   </div>
-  <p class="empty" style="margin-top:10px">Tap a status to move it along: Not started → In progress → Done.</p>`;
+  ${pm[""].n ? `<p class="hint" style="margin-top:10px">${pm[""].n} cost${pm[""].n===1?" has":"s have"} no phase (${money(pm[""].committed)}). <a class="ext" href="#budget" data-act="phaseCosts" data-id="">Review them</a> and assign a phase so they count here.</p>` : ""}
+  <p class="empty" style="margin-top:10px">Tap a status to move it along: Not started → In progress → Done. Set a budget on a phase with Edit.</p>`;
 }
 
 function vBudget(){
@@ -271,15 +306,20 @@ function vBudget(){
   const phaseName = id => id ? (S.phases.find(p=>p.id===id)?.title || "Removed phase") : "General";
   const keyOf = { phase: c => phaseName(c.phaseId), category: catOf, vendor: c => (c.vendor||"").trim() || "No vendor" }[ui.spendBy] || (c=>phaseName(c.phaseId));
   const groups = {};
-  S.costs.forEach(c => { const m = costMath(c); const k = keyOf(c); const g = (groups[k] ||= {paid:0, held:0, rest:0});
+  S.costs.forEach(c => { const m = costMath(c); const k = keyOf(c); const g = (groups[k] ||= {paid:0, held:0, rest:0, bud:0});
     g.paid += m.paid; g.held += m.held; g.rest += Math.max(0, m.balance - m.held); });
-  const rows = Object.entries(groups).map(([name,v])=>({name, ...v, tot:v.paid+v.held+v.rest})).sort((a,b)=>b.tot-a.tot);
-  const max = Math.max(1, ...rows.map(r=>r.tot));
+  if(ui.spendBy==="phase") S.phases.forEach(p => { if(+p.budget){ const g = (groups[p.title] ||= {paid:0, held:0, rest:0, bud:0}); g.bud = +p.budget; g.order = S.phases.indexOf(p); } else if(groups[p.title]) groups[p.title].order = S.phases.indexOf(p); });
+  let rows = Object.entries(groups).map(([name,v])=>({name, ...v, tot:v.paid+v.held+v.rest}));
+  rows = ui.spendBy==="phase" ? rows.sort((a,b)=>(a.order??999)-(b.order??999)) : rows.sort((a,b)=>b.tot-a.tot);
+  const max = Math.max(1, ...rows.map(r=>Math.max(r.tot, r.bud||0)));
+  const phaseOptsF = [["all","All phases"], ...S.phases.filter(p=>S.costs.some(c=>c.phaseId===p.id)).map(p=>[p.id,p.title]), ...(S.costs.some(c=>!c.phaseId || !S.phases.some(p=>p.id===c.phaseId)) ? [["none","No phase"]] : [])];
+  if(!phaseOptsF.some(o=>o[0]===ui.costPhase)) ui.costPhase = "all";
 
   const cats = [...new Set(S.costs.map(catOf))].sort((a,b)=>{ const ia=COST_CATS.indexOf(a), ib=COST_CATS.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib); });
   if(ui.costCat!=="all" && !cats.includes(ui.costCat)) ui.costCat = "all";
   const list = S.costs.map(c=>({c, m:costMath(c)})).filter(({c,m}) =>
     (ui.costCat==="all" || catOf(c)===ui.costCat) &&
+    (ui.costPhase==="all" || (ui.costPhase==="none" ? !(c.phaseId && S.phases.some(p=>p.id===c.phaseId)) : c.phaseId===ui.costPhase)) &&
     (ui.costShow==="all" || (ui.costShow==="owed" && m.state!=="quote" && m.balance>0) || (ui.costShow==="paid" && m.state==="paid") || (ui.costShow==="quotes" && m.state==="quote") || (ui.costShow==="held" && m.held>0)));
   const sum = (k) => list.reduce((a,x)=>a+x.m[k],0);
   const clip = `<svg class="clip" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/></svg>`;
@@ -306,18 +346,20 @@ function vBudget(){
       ${f.nUnset ? `<p class="hint" style="margin:8px 0 0">${f.nUnset} payment${f.nUnset>1?"s don't":" doesn't"} say where the money came from. Open the cost and pick the source under Payments.</p>` : ""}</div>`; })()}
   ${rows.length ? `<div class="panel" style="margin-bottom:16px">
     <div class="toolbar" style="margin-bottom:12px"><h3 style="margin:0">Spending by ${ {phase:"phase",category:"category",vendor:"vendor"}[ui.spendBy] }</h3>${seg("spendBy",[["category","Category"],["vendor","Vendor"],["phase","Phase"]])}</div>
-    <div class="bars">${rows.map(r=>`<div class="bar"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
-      <span class="track"><span style="width:${r.paid/max*100}%;background:var(--good)"></span><span style="width:${r.held/max*100}%;background:var(--accent)"></span><span style="width:${r.rest/max*100}%;background:var(--warn);opacity:.55"></span></span>
-      <span class="amt">${money(r.tot)}</span></div>`).join("")}</div>
-    <div class="legend" style="margin-top:10px"><span style="--c:var(--good)">Paid</span><span style="--c:var(--accent)">Retainage held</span><span style="--c:var(--warn)">Owed or quoted</span></div></div>`:""}
+    <div class="bars ${ui.spendBy==="phase"?"phasebars":""}">${rows.map(r=>{ const over = r.bud && r.tot > r.bud + 0.004; return `<div class="bar"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
+      <span class="track"><span style="width:${r.paid/max*100}%;background:var(--good)"></span><span style="width:${r.held/max*100}%;background:var(--accent)"></span><span style="width:${r.rest/max*100}%;background:var(--warn);opacity:.55"></span>${r.bud?`<i class="bud" style="left:${(r.bud/max*100).toFixed(2)}%" title="Budget ${money(r.bud)}"></i>`:""}</span>
+      <span class="amt" style="${over?"color:var(--bad)":""}">${money(r.tot)}${r.bud?`<small> / ${money(r.bud)}</small>`:""}</span></div>`; }).join("")}</div>
+    <div class="legend" style="margin-top:10px"><span style="--c:var(--good)">Paid</span><span style="--c:var(--accent)">Retainage held</span><span style="--c:var(--warn)">Owed or quoted</span>${ui.spendBy==="phase"&&rows.some(r=>r.bud)?`<span class="budkey">Phase budget</span>`:""}</div>
+    ${ui.spendBy==="phase" && !S.phases.some(p=>+p.budget) ? `<p class="hint" style="margin:8px 0 0">Set a budget on each phase (Schedule → Phases → Edit) to compare planned and actual costs here.</p>` : ""}</div>`:""}
   ${S.costs.length ? `
   <div class="toolbar">${seg("costShow",[["all","All"],["owed","Owed"],["paid","Paid"],["held","Retainage"],["quotes","Quotes"]])}<span class="hint num">${list.length} cost${list.length===1?"":"s"} · ${money(sum("amt"))} total · ${money(sum("paid"))} paid</span></div>
+  ${phaseOptsF.length>2 || ui.costPhase!=="all" ? `<div class="toolbar" style="margin:-4px 0 10px"><label class="srcpick" for="costPhaseSel" style="margin:0"><span>Phase</span><select id="costPhaseSel">${phaseOptsF.map(([v,l])=>`<option value="${esc(v)}" ${v===ui.costPhase?"selected":""}>${esc(l)}</option>`).join("")}</select></label></div>` : ""}
   ${cats.length>1 ? `<div class="chips" style="margin-bottom:12px" role="group" aria-label="Filter by category"><button class="chip" data-act="ui" data-k="costCat" data-v="all" aria-pressed="${ui.costCat==="all"}">All categories</button>${cats.map(c=>`<button class="chip" data-act="ui" data-k="costCat" data-v="${esc(c)}" aria-pressed="${ui.costCat===c}">${esc(c)}</button>`).join("")}</div>` : ""}` : ""}
   <div class="tablebox">
     ${S.costs.length ? (list.length ? `<table class="costs"><thead><tr><th>Date</th><th>Item</th><th>Vendor</th><th>Category</th><th>Status</th><th class="r">Amount</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead><tbody>
       ${list.map(({c,m})=>{ const nR = (c.receipts||[]).length; return `<tr class="clickable" data-act="costDetail" data-id="${esc(c.id)}">
         <td class="mono c-date">${fmtDate(c.date)}</td>
-        <td class="c-item">${esc(c.item)}${nR?` <span class="rc" title="${nR} receipt${nR>1?"s":""}">${clip}${nR}</span>`:""}</td>
+        <td class="c-item">${esc(c.item)}${nR?` <span class="rc" title="${nR} receipt${nR>1?"s":""}">${clip}${nR}</span>`:""}<div class="hint ph">${esc(c.phaseId ? (S.phases.find(p=>p.id===c.phaseId)?.title || "Removed phase") : "No phase")}</div></td>
         <td class="c-vendor">${esc(c.vendor)}</td>
         <td class="c-cat">${esc(catOf(c))}</td>
         <td class="c-status"><span class="pill ${STATE[m.state][1]}">${STATE[m.state][0]}</span></td>
@@ -963,6 +1005,7 @@ const FORMS = {
   phases: { title:"Phase", coll:"phases", fields:[
     {k:"title",l:"Phase",full:1,req:1},
     {k:"status",l:"Status",t:"select",o:Object.entries(STATUS)},
+    {k:"budget",l:"Phase budget ($)",t:"number",ph:"Planned cost for this phase"},
     {k:"order",l:"Order",t:"number"},
     {k:"start",l:"Start",t:"date"},{k:"end",l:"Finish",t:"date"},
     {k:"inspection",l:"County inspection",full:1,ph:"e.g. Framing"},
@@ -972,13 +1015,14 @@ const FORMS = {
   costs: { title:"Cost", coll:"costs", post:o=>{
       const m = costMath(o);
       if(o.status==="paid" && Array.isArray(o.payments) && o.payments.length && m.balance - m.held > 0.004)
-        o.payments = [...o.payments, {id:newId(), kind:"payment", date:today(), amount:+(m.balance-m.held).toFixed(2), retained:0, method:"", ref:"", note:"Marked paid in full", by:me||""}];
+        o.payments = [...o.payments, {id:newId(), kind:"payment", date:today(), amount:+(m.balance-m.held).toFixed(2), retained:0, ...(o.paidFrom?{source:o.paidFrom}:{}), method:"", ref:"", note:"Marked paid in full", by:me||""}];
     }, fields:[
     {k:"item",l:"What it's for",full:1,req:1,ph:"e.g. Framing labor, concrete for slab"},
     {k:"category",l:"Category",t:"select",o:()=>[["","Choose a category"], ...COST_CATS.map(c=>[c,c])]},
     {k:"vendor",l:"Vendor or sub",ph:"e.g. HPM Building Supply",list:vendorNames},
     {k:"amount",l:"Amount ($)",t:"number",req:1,ph:"Contract, quote or purchase total"},
     {k:"status",l:"Status",t:"select",o:Object.entries(COST_ST)},
+    {k:"paidFrom",l:"If paid in full, paid from",t:"select",o:()=>[["","Choose when marking paid"], ["own","Own money"], ...S.draws.map(d=>["draw:"+d.id, drawLabel(d)])]},
     {k:"retainagePct",l:"Retainage held (%)",t:"number",ph:"e.g. 10, if any"},
     {k:"date",l:"Date",t:"date"},
     {k:"due",l:"Next payment due",t:"date"},
@@ -1213,6 +1257,7 @@ document.addEventListener("click", async e => {
   if(act==="ui"){ ui[t.dataset.k] = t.dataset.v; render(); return; }
   if(act==="costDetail"){ openCostDetail(id); return; }
   if(act==="drawPacket"){ openDrawPacket(id); return; }
+  if(act==="phaseCosts"){ e.preventDefault(); ui.costPhase = id ? id : "none"; ui.costCat = "all"; ui.costShow = "all"; ui.spendBy = "phase"; if(location.hash!=="#budget") location.hash = "#budget"; else render(); return; }
   if(act==="receiptView"){ const u = urlCache.get(t.dataset.path)?.url; if(u) window.open(u, "_blank", "noopener"); return; }
   if(act==="exportCosts"){ exportCosts(); return; }
   if(act==="exportPayments"){ exportPayments(); return; }
@@ -1278,6 +1323,7 @@ document.addEventListener("click", async e => {
   }
 });
 $("#editProject").addEventListener("click", ()=>openForm("project"));
+document.addEventListener("change", e => { if(e.target.id==="costPhaseSel"){ ui.costPhase = e.target.value; render(); } });
 document.addEventListener("error", e => {
   const img = e.target; if(!(img instanceof HTMLImageElement) || img.dataset.failed) return;
   img.dataset.failed = "1"; img.removeAttribute("src"); img.alt = "Photo unavailable";

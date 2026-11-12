@@ -429,3 +429,15 @@ table.mini th,table.mini td{padding:7px 10px}
   .tablebox.flat table.mini tr{display:table-row;padding:0}
   .tablebox.flat table.mini td{display:table-cell;padding:7px 8px;border-top:1px solid var(--line)}
 }
+
+/* ---------- phase money ---------- */
+.pmoney{margin-top:8px;max-width:520px}
+.pmoney .meter{height:8px;margin:0 0 4px;position:relative;overflow:visible}
+.meter i.bud,.track i.bud{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;background:var(--ink);border-radius:1px;opacity:.75}
+.track{position:relative;overflow:visible}
+.phasebars .bar .track{overflow:visible}
+.bar .amt small{color:var(--muted);font-size:.78em}
+.phasebars .bar{grid-template-columns:minmax(0,11rem) 1fr 9.5rem}
+.legend .budkey::before{width:2px!important;height:12px!important;background:var(--ink)!important;border-radius:1px!important}
+.c-item .ph{font-size:.76rem;margin-top:1px}
+@media (max-width:640px){ .phasebars .bar{grid-template-columns:minmax(0,1fr) 8rem} }
