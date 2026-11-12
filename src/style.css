@@ -311,6 +311,14 @@ nav.tabs .m{display:none}
   .tablebox thead{display:none}
   .tablebox tbody{display:block}
   .tablebox tr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"item amt" "vendor status" "phase date";gap:3px 12px;padding:12px 16px;border-top:1px solid var(--line)}
+  .tablebox table.costs{min-width:0}
+  table.costs tr{grid-template-areas:"item amt" "vendor status" "cat paid" "date bal"}
+  .c-cat{grid-area:cat;font-size:.82rem;color:var(--muted)}
+  .c-paid{grid-area:paid;font-size:.82rem;color:var(--good)}
+  .c-bal{grid-area:bal;font-size:.82rem}
+  .m-lbl{display:inline!important;color:var(--muted)}
+  .sheet .cd-sum{grid-template-columns:1fr 1fr}
+  table.costs .c-date{text-align:left}
   .tablebox tr:first-child{border-top:0}
   .tablebox td{border:0;padding:0;min-width:0}
   .c-item{grid-area:item;font-weight:600}
@@ -381,3 +389,26 @@ nav.tabs .m{display:none}
 @media (prefers-reduced-motion:reduce){.splash img{animation:none}}
 .auth-card p{margin:0}
 .auth-card h1{margin-bottom:-6px}
+
+/* ---------- costs: payments, retainage, receipts ---------- */
+.pill.held{background:var(--accent-soft);color:var(--accent)}
+table.costs{min-width:820px}
+.m-lbl{display:none}
+.rc{display:inline-flex;align-items:center;gap:2px;font-size:.74rem;color:var(--muted);font-weight:600;margin-left:4px;vertical-align:1px}
+.clip{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.cd-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
+.cd-head h3{margin-bottom:2px!important}
+.cd-sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:10px}
+.cd-sum > div{background:var(--sunk);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.cd-sum b{font-size:1.1rem;font-weight:700;letter-spacing:-.01em}
+.cd-h{font-size:.95rem;margin:20px 0 8px;letter-spacing:-.01em}
+.pays{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.pay{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--line)}
+.pay:first-child{border-top:0}
+.payform{margin-top:12px;padding:14px;border:1px dashed var(--line);border-radius:12px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.payform .fields{width:100%}
+.paynow{padding:10px 0;font-weight:700;font-family:var(--f-mono)}
+.thumb.pdf,.thumb.add{display:grid;place-items:center;text-decoration:none;font-family:var(--f-mono);font-weight:600;font-size:.8rem;color:var(--accent);border:1px solid var(--line)}
+.thumb.add{cursor:pointer;font-size:1.6rem;font-family:var(--f-body);color:var(--muted);border-style:dashed;background:none}
+.thumb.add:hover{color:var(--accent);border-color:var(--accent)}
+.pdfmark{display:grid;place-items:center;width:100%;height:100%;font-family:var(--f-mono);font-weight:600;font-size:.8rem;color:var(--accent)}

@@ -11,7 +11,7 @@ const S = { project:{}, phases:[], costs:[], log:[], contacts:[], selections:[],
   changes:[], draws:[], punch:[], documents:[], questions:[], vendors:[], loaded:false };
 let readOnly = false;
 const selFilter = { room:"all", cat:"all" };
-const ui = { punchList:"punch", qFilter:"open", docCat:"all", tlRange:"upcoming" };
+const ui = { punchList:"punch", qFilter:"open", docCat:"all", tlRange:"upcoming", spendBy:"category", costShow:"all", costCat:"all" };
 const CO_ST = {proposed:"Proposed", approved:"Approved", rejected:"Rejected"};
 const CO_CLASS = {proposed:"active", approved:"done", rejected:"failed"};
 const DRAW_ST = {upcoming:"Upcoming", requested:"Requested", inspected:"Lender inspected", funded:"Funded"};
@@ -33,7 +33,11 @@ const selTotal = s => (+s.price||0) * (s.qty===null||s.qty===undefined||s.qty===
 
 const STATUS = {todo:"Not started", active:"In progress", done:"Done"};
 const INSP = {none:"No inspection", scheduled:"Scheduled", passed:"Passed", failed:"Failed"};
-const COST_ST = {estimate:"Estimate / quote", paid:"Paid"};
+const COST_ST = {estimate:"Quote / estimate", committed:"Contracted or ordered", paid:"Paid in full"};
+const COST_CATS = ["Labor","Materials","Subcontractor","Permits & fees","Professional services","Equipment & rentals","Utilities & hookups","Appliances & fixtures","Insurance & loan costs","Other"];
+const PAY_METHODS = ["Check","Bank transfer","Credit card","Cash","Loan draw","Other"];
+const STATE = {quote:["Quote",""], committed:["Not paid yet","active"], partial:["Partly paid","active"], held:["Retainage held","held"], paid:["Paid","done"]};
+const catOf = c => c.category || "Uncategorized";
 
 /* ---------- small UI helpers (data layer is at the bottom of this file) ---------- */
 function setRO(v){ readOnly = v; document.body.classList.toggle("ro", v); }
@@ -41,11 +45,34 @@ function showNotice(t){ const n=$("#notice"); n.textContent=t; n.hidden=false; }
 function hideNotice(){ $("#notice").hidden=true; }
 
 /* ---------- derived ---------- */
+/* One cost = a contract or purchase. Payments chip away at it; retainage is the part billed but held back.
+   paid    = cash actually paid (including retainage releases)
+   held    = retainage withheld and not yet released
+   balance = still owed overall (amount - paid), which includes held retainage */
+function payList(c){
+  if(Array.isArray(c.payments) && c.payments.length) return c.payments;
+  if(c.status==="paid" && +c.amount) return [{id:"legacy", date:c.date||"", kind:"payment", amount:+c.amount, retained:0, method:"", note:"Marked paid in full", legacy:true}];
+  return [];
+}
+function costMath(c){
+  const amt = Math.max(0, +c.amount||0);
+  const pct = Math.max(0, Math.min(100, +c.retainagePct||0));
+  const pays = payList(c);
+  const paid = pays.reduce((a,p)=>a+(+p.amount||0),0);
+  const held = Math.max(0, pays.reduce((a,p)=>a+(p.kind==="release" ? -(+p.amount||0) : (+p.retained||0)),0));
+  const balance = Math.max(0, amt - paid);
+  const unbilled = Math.max(0, amt - paid - held);
+  const state = paid===0 && held===0 ? (c.status==="estimate" ? "quote" : "committed")
+    : paid >= amt - 0.005 ? "paid" : held>0 && unbilled < 0.005 ? "held" : "partial";
+  return {amt, pct, paid, held, balance, unbilled, state, pays};
+}
 function totals(){
-  const paid = S.costs.filter(c=>c.status==="paid").reduce((a,c)=>a+(+c.amount||0),0);
-  const est = S.costs.filter(c=>c.status!=="paid").reduce((a,c)=>a+(+c.amount||0),0);
+  let paid=0, held=0, owed=0, quoted=0, committed=0;
+  S.costs.forEach(c=>{ const m = costMath(c); paid += m.paid; held += m.held;
+    if(m.state==="quote") quoted += m.balance; else owed += m.balance;
+    committed += Math.max(m.amt, m.paid); });
   const budget = +S.project.budget || 0;
-  return {paid, est, budget, committed: paid+est, left: budget - paid - est};
+  return {paid, held, owed, quoted, est: owed+quoted, budget, committed, left: budget - committed};
 }
 function daysTo(d){ if(!d) return null; return Math.round((new Date(d+"T12:00:00") - new Date(today()+"T12:00:00"))/864e5); }
 
@@ -113,7 +140,7 @@ function events(){
     if(d.requestedDate && d.status!=="upcoming") ev.push({date:d.requestedDate, kind:"Draw requested", text:`Draw ${d.number??""}: ${d.milestone||""}`, view:"draws", done:d.status==="funded"});
   });
   S.punch.forEach(p=>{ if(p.due && p.status==="open") ev.push({date:p.due, kind:"Punch due", text:p.item, view:"punch", flag:true}); });
-  S.costs.forEach(c=>{ if(c.due && c.status!=="paid") ev.push({date:c.due, kind:"Payment due", text:`${c.item}${c.vendor?` · ${c.vendor}`:""} · ${money(c.amount)}`, view:"budget", flag:true}); });
+  S.costs.forEach(c=>{ const m = costMath(c); if(c.due && m.state!=="quote" && m.balance - m.held > 0) ev.push({date:c.due, kind:"Payment due", text:`${c.item}${c.vendor?` · ${c.vendor}`:""} · ${money(m.balance - m.held)}`, view:"budget", flag:true}); });
   if(S.project.targetDate) ev.push({date:S.project.targetDate, kind:"Target", text:"Move-in", view:"overview"});
   return ev.sort((a,b)=>a.date.localeCompare(b.date));
 }
@@ -155,7 +182,7 @@ function vOverview(){
     <div class="panel">
       <h3>Budget</h3>
       ${t.budget ? `<div class="meter"><div class="paid" style="width:${pct(t.paid)}%"></div><div class="est" style="width:${pct(t.est)}%"></div></div>
-      <div class="legend"><span style="--c:var(--good)">Paid ${money(t.paid)}</span><span style="--c:var(--warn)">Quoted ${money(t.est)}</span><span style="--c:var(--sunk)">Unallocated ${money(Math.max(0,t.left))}</span></div>
+      <div class="legend"><span style="--c:var(--good)">Paid ${money(t.paid)}</span><span style="--c:var(--warn)">Owed or quoted ${money(t.est)}</span><span style="--c:var(--sunk)">Unallocated ${money(Math.max(0,t.left))}</span></div>
       ${t.left<0 ? `<p style="color:var(--bad);font-weight:600;margin:10px 0 0">Over budget by ${money(-t.left)} including quotes.</p>`:""}`
       : `<p class="empty">Paid so far: ${money(t.paid)}. Add a total budget in project details to track what's left.</p>`}
       ${(+p.loanAmount || S.draws.length) ? (()=>{ const f=S.draws.filter(d=>d.status==="funded").reduce((a,d)=>a+(+d.amount||0),0); return `<p style="margin:12px 0 0;font-size:.9rem">Loan draws funded: <b class="mono">${money(f)}</b>${+p.loanAmount?` of <b class="mono">${money(p.loanAmount)}</b>`:""}</p>`; })() : ""}
@@ -205,29 +232,214 @@ function vPhases(){
 
 function vBudget(){
   const t = totals();
-  const byPhase = {};
-  S.costs.forEach(c=>{ const k=c.phaseId||""; (byPhase[k] ||= {paid:0,est:0}); byPhase[k][c.status==="paid"?"paid":"est"] += (+c.amount||0); });
-  const rows = Object.entries(byPhase).map(([k,v])=>({name: k ? (S.phases.find(p=>p.id===k)?.title || "Removed phase") : "General", ...v, tot:v.paid+v.est})).sort((a,b)=>b.tot-a.tot);
-  const max = Math.max(1,...rows.map(r=>r.tot));
-  const phaseName = id => id ? (S.phases.find(p=>p.id===id)?.title || "—") : "General";
+  const phaseName = id => id ? (S.phases.find(p=>p.id===id)?.title || "Removed phase") : "General";
+  const keyOf = { phase: c => phaseName(c.phaseId), category: catOf, vendor: c => (c.vendor||"").trim() || "No vendor" }[ui.spendBy] || (c=>phaseName(c.phaseId));
+  const groups = {};
+  S.costs.forEach(c => { const m = costMath(c); const k = keyOf(c); const g = (groups[k] ||= {paid:0, held:0, rest:0});
+    g.paid += m.paid; g.held += m.held; g.rest += Math.max(0, m.balance - m.held); });
+  const rows = Object.entries(groups).map(([name,v])=>({name, ...v, tot:v.paid+v.held+v.rest})).sort((a,b)=>b.tot-a.tot);
+  const max = Math.max(1, ...rows.map(r=>r.tot));
+
+  const cats = [...new Set(S.costs.map(catOf))].sort((a,b)=>{ const ia=COST_CATS.indexOf(a), ib=COST_CATS.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib); });
+  if(ui.costCat!=="all" && !cats.includes(ui.costCat)) ui.costCat = "all";
+  const list = S.costs.map(c=>({c, m:costMath(c)})).filter(({c,m}) =>
+    (ui.costCat==="all" || catOf(c)===ui.costCat) &&
+    (ui.costShow==="all" || (ui.costShow==="owed" && m.state!=="quote" && m.balance>0) || (ui.costShow==="paid" && m.state==="paid") || (ui.costShow==="quotes" && m.state==="quote") || (ui.costShow==="held" && m.held>0)));
+  const sum = (k) => list.reduce((a,x)=>a+x.m[k],0);
+  const clip = `<svg class="clip" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/></svg>`;
+
   return `
-  <div class="viewhead"><h2>Budget & costs</h2><button class="btn primary write" data-act="addCost">Add cost</button></div>
+  <div class="viewhead"><h2>Budget & costs</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${S.costs.length ? `<button class="btn" data-act="exportCosts">Export costs</button><button class="btn" data-act="exportPayments">Export payments</button>` : ""}
+      <button class="btn primary write" data-act="addCost">Add cost</button>
+    </div></div>
   <div class="tiles">
-    <div class="tile"><div class="label">Total budget</div><div class="v num">${t.budget?money(t.budget):"—"}</div></div>
-    <div class="tile"><div class="label">Paid</div><div class="v num">${money(t.paid)}</div></div>
-    <div class="tile"><div class="label">Quoted, not paid</div><div class="v num">${money(t.est)}</div></div>
-    <div class="tile"><div class="label">Left after quotes</div><div class="v num" style="color:${t.left<0?"var(--bad)":"inherit"}">${t.budget?money(t.left):"—"}</div></div>
+    <div class="tile"><div class="label">Total budget</div><div class="v num">${t.budget?money(t.budget):"—"}</div><div class="hint">${t.budget?`${money(t.committed)} committed`:`<button class="btn-link write" data-act="project">Set a budget</button>`}</div></div>
+    <div class="tile" style="border-top-color:var(--good)"><div class="label">Paid so far</div><div class="v num">${money(t.paid)}</div><div class="hint">${t.budget?Math.round(t.paid/t.budget*100)+"% of budget":""}</div></div>
+    <div class="tile" style="border-top-color:var(--warn)"><div class="label">Still owed</div><div class="v num">${money(t.owed)}</div><div class="hint">On contracts and orders</div></div>
+    <div class="tile" style="border-top-color:var(--accent)"><div class="label">Retainage held</div><div class="v num">${money(t.held)}</div><div class="hint">Release when work is accepted</div></div>
+    <div class="tile" style="border-top-color:var(--line)"><div class="label">Quotes pending</div><div class="v num">${money(t.quoted)}</div><div class="hint">Not agreed yet</div></div>
+    <div class="tile" style="border-top-color:${t.left<0?"var(--bad)":"var(--good)"}"><div class="label">Left in budget</div><div class="v num" style="color:${t.left<0?"var(--bad)":"inherit"}">${t.budget?money(t.left):"—"}</div><div class="hint">After everything above</div></div>
   </div>
-  ${rows.length ? `<div class="panel" style="margin-bottom:16px"><h3>Spending by phase</h3>
+  ${rows.length ? `<div class="panel" style="margin-bottom:16px">
+    <div class="toolbar" style="margin-bottom:12px"><h3 style="margin:0">Spending by ${ {phase:"phase",category:"category",vendor:"vendor"}[ui.spendBy] }</h3>${seg("spendBy",[["category","Category"],["vendor","Vendor"],["phase","Phase"]])}</div>
     <div class="bars">${rows.map(r=>`<div class="bar"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
-      <span class="track"><span style="width:${r.paid/max*100}%;background:var(--good)"></span><span style="width:${r.est/max*100}%;background:var(--warn);opacity:.7"></span></span>
+      <span class="track"><span style="width:${r.paid/max*100}%;background:var(--good)"></span><span style="width:${r.held/max*100}%;background:var(--accent)"></span><span style="width:${r.rest/max*100}%;background:var(--warn);opacity:.55"></span></span>
       <span class="amt">${money(r.tot)}</span></div>`).join("")}</div>
-    <div class="legend" style="margin-top:10px"><span style="--c:var(--good)">Paid</span><span style="--c:var(--warn)">Quoted</span></div></div>`:""}
+    <div class="legend" style="margin-top:10px"><span style="--c:var(--good)">Paid</span><span style="--c:var(--accent)">Retainage held</span><span style="--c:var(--warn)">Owed or quoted</span></div></div>`:""}
+  ${S.costs.length ? `
+  <div class="toolbar">${seg("costShow",[["all","All"],["owed","Owed"],["paid","Paid"],["held","Retainage"],["quotes","Quotes"]])}<span class="hint num">${list.length} cost${list.length===1?"":"s"} · ${money(sum("amt"))} total · ${money(sum("paid"))} paid</span></div>
+  ${cats.length>1 ? `<div class="chips" style="margin-bottom:12px" role="group" aria-label="Filter by category"><button class="chip" data-act="ui" data-k="costCat" data-v="all" aria-pressed="${ui.costCat==="all"}">All categories</button>${cats.map(c=>`<button class="chip" data-act="ui" data-k="costCat" data-v="${esc(c)}" aria-pressed="${ui.costCat===c}">${esc(c)}</button>`).join("")}</div>` : ""}` : ""}
   <div class="tablebox">
-    ${S.costs.length ? `<table><thead><tr><th>Date</th><th>Item</th><th>Vendor</th><th>Phase</th><th>Status</th><th class="r">Amount</th></tr></thead><tbody>
-      ${S.costs.map(c=>`<tr class="clickable" data-act="editCost" data-id="${esc(c.id)}"><td class="mono c-date">${fmtDate(c.date)}</td><td class="c-item">${esc(c.item)}</td><td class="c-vendor">${esc(c.vendor)}</td><td class="c-phase">${esc(phaseName(c.phaseId))}</td><td class="c-status"><span class="pill ${c.status==="paid"?"done":"active"}">${c.status==="paid"?"Paid":"Quote"}</span></td><td class="r num mono c-amt">${money(c.amount)}</td></tr>`).join("")}
-    </tbody></table>` : `<p class="empty" style="padding:14px 16px;margin:0">No costs yet. Add quotes as they come in and mark them paid when the check clears.</p>`}
+    ${S.costs.length ? (list.length ? `<table class="costs"><thead><tr><th>Date</th><th>Item</th><th>Vendor</th><th>Category</th><th>Status</th><th class="r">Amount</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead><tbody>
+      ${list.map(({c,m})=>{ const nR = (c.receipts||[]).length; return `<tr class="clickable" data-act="costDetail" data-id="${esc(c.id)}">
+        <td class="mono c-date">${fmtDate(c.date)}</td>
+        <td class="c-item">${esc(c.item)}${nR?` <span class="rc" title="${nR} receipt${nR>1?"s":""}">${clip}${nR}</span>`:""}</td>
+        <td class="c-vendor">${esc(c.vendor)}</td>
+        <td class="c-cat">${esc(catOf(c))}</td>
+        <td class="c-status"><span class="pill ${STATE[m.state][1]}">${STATE[m.state][0]}</span></td>
+        <td class="r num mono c-amt">${money(m.amt)}</td>
+        <td class="r num mono c-paid"><span class="m-lbl">Paid </span>${money(m.paid)}</td>
+        <td class="r num mono c-bal"><span class="m-lbl">Owed </span>${m.balance?money(m.balance):"—"}${m.held?`<div class="hint">${money(m.held)} held</div>`:""}</td>
+      </tr>`; }).join("")}
+    </tbody></table>` : `<p class="empty" style="padding:14px 16px;margin:0">No costs match these filters.</p>`)
+    : `<p class="empty" style="padding:14px 16px;margin:0">No costs yet. Add each contract, quote or purchase with its category and vendor. Then record payments against it as they're made, attach receipts, and track any retainage held back from the contractor.</p>`}
+  </div>
+  ${S.costs.length ? `<p class="hint" style="margin-top:10px">Tap a cost to record payments, attach receipts or release retainage.</p>` : ""}`;
+}
+
+/* ---------- cost detail: payments, retainage, receipts ---------- */
+function openCostDetail(id){
+  const c = S.costs.find(x=>x.id===id); if(!c){ closeSheet(); return; }
+  const m = costMath(c);
+  const receipts = (c.receipts||[]).filter(r=>r && isAsset(r.id));
+  const phase = c.phaseId ? (S.phases.find(p=>p.id===c.phaseId)?.title||"") : "";
+  const scrim = $("#scrim"); scrim.classList.remove("lbx");
+  const fileTile = r => /^image\//.test(r.type||"")
+    ? `<button type="button" class="thumb" data-act="receiptView" data-id="${esc(c.id)}" data-path="${esc(r.id)}" style="border:0;padding:0;cursor:zoom-in"><img src="${blob(r.id)}" data-path="${esc(r.id)}" alt="${esc(r.name||"Receipt")}"></button>`
+    : `<a class="thumb pdf" href="${blob(r.id)}" data-fpath="${esc(r.id)}" target="_blank" rel="noopener" title="${esc(r.name||"PDF")}"><span>PDF</span></a>`;
+  scrim.innerHTML = `<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="cd-head"><div style="min-width:0"><h3 id="sheetTitle" style="margin-bottom:2px">${esc(c.item)}</h3>
+      <div class="hint">${esc([c.vendor, catOf(c), phase].filter(Boolean).join(" · "))}</div></div>
+      <span class="pill ${STATE[m.state][1]}">${STATE[m.state][0]}</span></div>
+    <div class="cd-sum">
+      <div><span class="label">Amount</span><b class="num">${money(m.amt)}</b></div>
+      <div><span class="label">Paid</span><b class="num" style="color:var(--good)">${money(m.paid)}</b></div>
+      ${(m.pct||m.held) ? `<div><span class="label">Retainage held${m.pct?` (${m.pct}%)`:""}</span><b class="num" style="color:var(--accent)">${money(m.held)}</b></div>` : ""}
+      <div><span class="label">Still owed</span><b class="num">${money(m.balance)}</b></div>
+    </div>
+    ${m.amt ? `<div class="meter" style="margin:4px 0 2px"><div class="paid" style="width:${Math.min(100,m.paid/m.amt*100)}%"></div><div style="width:${Math.min(100,m.held/m.amt*100)}%;background:var(--accent)"></div></div>` : ""}
+    ${c.due && m.balance>m.held ? `<p class="hint" style="margin:6px 0 0">Next payment due ${fmtDate(c.due)}</p>` : ""}
+
+    <h4 class="cd-h">Payments</h4>
+    ${m.pays.length ? `<div class="pays">${m.pays.map(p=>`<div class="pay">
+        <div style="min-width:0"><div><b class="num">${money(p.amount)}</b> ${p.kind==="release"?`<span class="pill held">Retainage release</span>`:""}</div>
+          <div class="hint">${[fmtDate(p.date), p.method, p.ref?`#${p.ref}`:"", +p.retained?`${money(p.retained)} retainage held`:"", p.note].filter(Boolean).map(esc).join(" · ")}</div></div>
+        ${!p.legacy && !readOnly ? `<button type="button" class="iconbtn" data-act="payDel" data-id="${esc(c.id)}" data-pid="${esc(p.id)}">Remove</button>` : ""}
+      </div>`).join("")}</div>` : `<p class="empty" style="margin:0">No payments yet.</p>`}
+
+    ${!readOnly && (m.balance - m.held > 0.004 || !m.amt) ? `<form class="payform" id="payForm" novalidate>
+      <div class="fields">
+        <label class="field" for="payBilled"><span class="label">${m.pct?"Amount billed":"Amount paid"} ($)</span><input id="payBilled" type="number" inputmode="decimal" step="any" value="${m.amt ? (m.balance-m.held).toFixed(2).replace(/\.00$/,"") : ""}"></label>
+        <label class="field" for="payDate"><span class="label">Date</span><input id="payDate" type="date" value="${today()}"></label>
+        ${m.pct ? `<label class="field" for="payHeld"><span class="label">Retainage held back ($)</span><input id="payHeld" type="number" inputmode="decimal" step="any"></label>
+          <div class="field"><span class="label">Paid now</span><div class="paynow num" id="payNow">—</div></div>` : ""}
+        <label class="field" for="payMethod"><span class="label">Paid by</span><select id="payMethod">${PAY_METHODS.map(x=>`<option>${x}</option>`).join("")}</select></label>
+        <label class="field" for="payRef"><span class="label">Check or reference no.</span><input id="payRef" placeholder="Optional"></label>
+        <label class="field full" for="payNote"><span class="label">Note</span><input id="payNote" placeholder="e.g. Progress payment 2 of 4"></label>
+      </div>
+      <div class="err" id="payErr" hidden></div>
+      <button class="btn primary" type="submit">Record payment</button>
+    </form>` : ""}
+
+    ${!readOnly && m.held > 0 ? `<form class="payform" id="relForm" novalidate>
+      <div class="fields">
+        <label class="field" for="relAmt"><span class="label">Release retainage ($)</span><input id="relAmt" type="number" inputmode="decimal" step="any" value="${m.held}"></label>
+        <label class="field" for="relDate"><span class="label">Date</span><input id="relDate" type="date" value="${today()}"></label>
+      </div>
+      <div class="err" id="relErr" hidden></div>
+      <button class="btn" type="submit">Release and pay</button>
+      <p class="hint" style="margin:8px 0 0">Release retainage once the work passes inspection and you have the contractor's lien releases.</p>
+    </form>` : ""}
+
+    <h4 class="cd-h">Receipts & invoices</h4>
+    <div class="thumbs">${receipts.map(fileTile).join("")}
+      ${!readOnly ? `<label class="thumb add" for="rcIn" title="Add receipt"><span>+</span><input type="file" id="rcIn" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label>` : ""}</div>
+    <div class="hint" id="rcMsg" aria-live="polite">${receipts.length ? "" : "Snap a photo of the receipt or upload the PDF invoice."}</div>
+    ${c.notes ? `<h4 class="cd-h">Notes</h4><p style="margin:0;white-space:pre-wrap">${esc(c.notes)}</p>` : ""}
+
+    <div class="foot">
+      ${!readOnly ? `<button type="button" class="btn" data-act="editCost" data-id="${esc(c.id)}">Edit details</button>` : ""}
+      <div class="right"><button type="button" class="btn primary" id="cdClose">Done</button></div>
+    </div>
   </div>`;
+  scrim.hidden = false;
+  $("#cdClose").onclick = closeSheet;
+  scrim.onclick = e => { if(e.target===scrim) closeSheet(); };
+  $("#sheet").onkeydown = e => { if(e.key==="Escape") closeSheet(); };
+
+  const base = () => { const cur = S.costs.find(x=>x.id===id) || c; const {id:_, ...body} = cur;
+    const pays = (Array.isArray(body.payments) && body.payments.length) ? [...body.payments] : payList(cur).map(p=>{ const {legacy, ...q} = p; return {...q, id: newId()}; });
+    return {...body, payments: pays}; };
+  const commit = async (out, errEl) => { const err = await save(`costs/${id}`, out); if(err){ errEl.textContent = err; errEl.hidden = false; return false; } openCostDetail(id); return true; };
+
+  const pf = $("#payForm");
+  if(pf){
+    const billed = $("#payBilled"), heldIn = $("#payHeld"), now = $("#payNow");
+    let heldTouched = false;
+    const recalc = () => { if(!heldIn) return; const b = +billed.value||0;
+      if(!heldTouched) heldIn.value = b ? +(b*m.pct/100).toFixed(2) : "";
+      now.textContent = money(Math.max(0, b - (+heldIn.value||0))); };
+    if(heldIn){ heldIn.oninput = () => { heldTouched = true; recalc(); }; billed.oninput = recalc; recalc(); }
+    pf.onsubmit = async e => { e.preventDefault();
+      const err = $("#payErr"); const b = +billed.value; const h = heldIn ? (+heldIn.value||0) : 0;
+      if(!(b>0)){ err.textContent = "Enter the amount."; err.hidden = false; billed.focus(); return; }
+      if(h<0 || h>b){ err.textContent = "Retainage can't be more than the amount billed."; err.hidden = false; return; }
+      const out = base();
+      out.payments.push({ id:newId(), kind:"payment", date:$("#payDate").value||today(), amount:+(b-h).toFixed(2), retained:+h.toFixed(2),
+        method:$("#payMethod").value, ref:$("#payRef").value.trim(), note:$("#payNote").value.trim(), by: me||"" });
+      if(out.status==="estimate") out.status = "committed";
+      if(!out.amount) out.amount = +(b).toFixed(2);
+      pf.querySelector("[type=submit]").disabled = true;
+      await commit(out, err);
+    };
+  }
+  const rf = $("#relForm");
+  if(rf) rf.onsubmit = async e => { e.preventDefault();
+    const err = $("#relErr"); const a = +$("#relAmt").value;
+    if(!(a>0) || a > m.held + 0.004){ err.textContent = `Enter an amount up to ${money(m.held)}.`; err.hidden = false; return; }
+    const out = base();
+    out.payments.push({ id:newId(), kind:"release", date:$("#relDate").value||today(), amount:+a.toFixed(2), retained:0, method:"", ref:"", note:"Retainage released", by: me||"" });
+    rf.querySelector("[type=submit]").disabled = true;
+    await commit(out, err);
+  };
+  const rc = $("#rcIn");
+  if(rc) rc.onchange = async () => {
+    const files = [...rc.files]; rc.value = ""; const msg = $("#rcMsg"); const added = []; let failed = "";
+    for(const [n,file] of files.entries()){
+      msg.textContent = `Uploading ${n+1} of ${files.length}…`;
+      try { const r = await assets.upload(file); added.push({id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}); }
+      catch(e){ failed = uploadErr(e, file); }
+    }
+    if(added.length){ const cur = S.costs.find(x=>x.id===id) || c; const {id:_, ...body} = cur;
+      const err = await save(`costs/${id}`, {...body, receipts:[...(body.receipts||[]), ...added]});
+      if(err) failed = err; else { openCostDetail(id); if(failed) $("#rcMsg").textContent = failed; return; } }
+    msg.textContent = failed || "";
+  };
+}
+function closeSheet(){ const sc = $("#scrim"); sc.hidden = true; sc.innerHTML = ""; sc.classList.remove("lbx"); }
+const uploadErr = (e, file) => ({unsupported_type:`${file.name} isn't supported. Use a JPG, PNG, WebP or PDF.`, too_large:`${file.name} is over 20 MB.`})[e?.code] || `Couldn't upload ${file.name}. Try again.`;
+
+/* ---------- CSV export ---------- */
+function csvCell(v){
+  if(v===null || v===undefined) return "";
+  if(typeof v==="number") return String(Math.round(v*100)/100);
+  let s = String(v);
+  if(/^[=+\-@\t\r]/.test(s)) s = "'" + s;          // keep spreadsheets from treating text as a formula
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+}
+function downloadCsv(name, header, rows){
+  const text = "﻿" + [header, ...rows].map(r=>r.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  const url = URL.createObjectURL(new Blob([text], {type:"text/csv;charset=utf-8"}));
+  const a = Object.assign(document.createElement("a"), {href:url, download:name});
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function exportCosts(){
+  const phaseName = id => id ? (S.phases.find(p=>p.id===id)?.title || "") : "General";
+  const rows = S.costs.map(c => { const m = costMath(c); return [c.date||"", c.item, c.vendor||"", catOf(c), phaseName(c.phaseId), STATE[m.state][0],
+    m.amt, m.paid, m.pct||0, m.held, m.balance, c.due||"", (c.receipts||[]).length, c.notes||""]; });
+  downloadCsv(`${slug(S.project.name||"house-build")}-costs-${today()}.csv`,
+    ["Date","Item","Vendor","Category","Phase","Status","Amount","Paid","Retainage %","Retainage held","Still owed","Payment due","Receipts","Notes"], rows);
+}
+function exportPayments(){
+  const rows = [];
+  S.costs.forEach(c => payList(c).forEach(p => rows.push([p.date||"", c.item, c.vendor||"", catOf(c), p.kind==="release"?"Retainage release":"Payment",
+    +p.amount||0, +p.retained||0, (+p.amount||0)+(+p.retained||0), p.method||"", p.ref||"", p.note||"", memberName(p.by)||""])));
+  rows.sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+  downloadCsv(`${slug(S.project.name||"house-build")}-payments-${today()}.csv`,
+    ["Date","Item","Vendor","Category","Type","Amount paid","Retainage held","Amount billed","Paid by","Reference","Note","Recorded by"], rows);
 }
 
 function orderSoon(s){ if(!s.orderBy || ["ordered","delivered","installed"].includes(s.status)) return null; const d = daysTo(s.orderBy); return d!==null && d<=14 ? d : null; }
@@ -438,8 +650,9 @@ function vDraws(){
 
 function vVendors(){
   const map = {};
-  S.costs.forEach(c => { const n=(c.vendor||"").trim(); if(!n) return; const k=slug(n); (map[k] ||= {name:n, paid:0, owed:0, n:0, due:null}); map[k][c.status==="paid"?"paid":"owed"] += (+c.amount||0); map[k].n++; if(c.status!=="paid" && c.due && (!map[k].due || c.due<map[k].due)) map[k].due = c.due; });
-  S.vendors.forEach(v => { const k = v.id; (map[k] ||= {name:v.name||k, paid:0, owed:0, n:0, due:null}); map[k].doc = v; });
+  S.costs.forEach(c => { const n=(c.vendor||"").trim(); if(!n) return; const k=slug(n); const m = costMath(c); const v = (map[k] ||= {name:n, paid:0, owed:0, held:0, n:0, due:null});
+    v.paid += m.paid; v.held += m.held; v.owed += m.balance - m.held; v.n++; if(m.state!=="quote" && m.balance - m.held > 0 && c.due && (!v.due || c.due<v.due)) v.due = c.due; });
+  S.vendors.forEach(v => { const k = v.id; (map[k] ||= {name:v.name||k, paid:0, owed:0, held:0, n:0, due:null}); map[k].doc = v; });
   const list = Object.entries(map).sort((a,b)=>(b[1].paid+b[1].owed)-(a[1].paid+a[1].owed));
   const missing = list.filter(([k,v])=>v.paid>0 && !v.doc?.lienRelease).length;
   const contactFor = n => S.contacts.find(c => slug(c.company)===slug(n) || slug(c.name)===slug(n));
@@ -454,7 +667,8 @@ function vVendors(){
         <label class="check" style="margin-top:8px"><input type="checkbox" data-act="lien" data-k="${esc(k)}" data-name="${esc(v.name)}" ${v.doc?.lienRelease?"checked":""} ${readOnly?"disabled":""}> Lien release received${v.doc?.lienDate?` · ${fmtDate(v.doc.lienDate)}`:""}</label>
       </div><div class="side">
         <span class="amt">${money(v.paid)}</span><span class="hint">paid</span>
-        ${v.owed?`<span class="amt" style="color:var(--warn)">${money(v.owed)}</span><span class="hint">quoted, unpaid</span>`:""}
+        ${v.held?`<span class="amt" style="color:var(--accent)">${money(v.held)}</span><span class="hint">retainage held</span>`:""}
+        ${v.owed>0.004?`<span class="amt" style="color:var(--warn)">${money(v.owed)}</span><span class="hint">owed or quoted</span>`:""}
       </div></div>`; }).join("")
     : `<p class="empty" style="padding:14px 0">No vendors yet. Add costs with a vendor name on the Budget tab and they'll be grouped here.</p>`}
   </div></div>`;
@@ -587,14 +801,21 @@ const FORMS = {
     {k:"inspectionStatus",l:"Inspection status",t:"select",o:Object.entries(INSP)},
     {k:"inspectionDate",l:"Inspection date",t:"date"},
     {k:"notes",l:"Notes",t:"textarea",full:1}]},
-  costs: { title:"Cost", coll:"costs", fields:[
-    {k:"item",l:"What it's for",full:1,req:1,ph:"e.g. Concrete for slab"},
-    {k:"vendor",l:"Vendor / sub",ph:"e.g. HPM Building Supply",list:vendorNames},
-    {k:"amount",l:"Amount ($)",t:"number",req:1},
+  costs: { title:"Cost", coll:"costs", post:o=>{
+      const m = costMath(o);
+      if(o.status==="paid" && Array.isArray(o.payments) && o.payments.length && m.balance - m.held > 0.004)
+        o.payments = [...o.payments, {id:newId(), kind:"payment", date:today(), amount:+(m.balance-m.held).toFixed(2), retained:0, method:"", ref:"", note:"Marked paid in full", by:me||""}];
+    }, fields:[
+    {k:"item",l:"What it's for",full:1,req:1,ph:"e.g. Framing labor, concrete for slab"},
+    {k:"category",l:"Category",t:"select",o:()=>[["","Choose a category"], ...COST_CATS.map(c=>[c,c])]},
+    {k:"vendor",l:"Vendor or sub",ph:"e.g. HPM Building Supply",list:vendorNames},
+    {k:"amount",l:"Amount ($)",t:"number",req:1,ph:"Contract, quote or purchase total"},
     {k:"status",l:"Status",t:"select",o:Object.entries(COST_ST)},
+    {k:"retainagePct",l:"Retainage held (%)",t:"number",ph:"e.g. 10, if any"},
     {k:"date",l:"Date",t:"date"},
-    {k:"due",l:"Payment due",t:"date"},
+    {k:"due",l:"Next payment due",t:"date"},
     {k:"phaseId",l:"Phase",t:"select",o:phaseOpts},
+    {k:"receipts",l:"Receipts & invoices",t:"files",full:1},
     {k:"notes",l:"Notes",t:"textarea",full:1}]},
   log: { title:"Site note", coll:"log", fields:[
     {k:"date",l:"Date",t:"date",req:1},
@@ -657,7 +878,7 @@ function openForm(kind, id){
   const F = FORMS[kind];
   const rec = F.single ? S[kind==="project"?"project":"allowances"] : (id ? S[kind].find(x=>x.id===id) : null) || {};
   const isNew = !F.single && !id;
-  const defaults = {phases:{status:"todo",inspectionStatus:"none",order:(S.phases.at(-1)?.order||0)+1}, costs:{status:"estimate",date:today()}, log:{date:today()},
+  const defaults = {phases:{status:"todo",inspectionStatus:"none",order:(S.phases.at(-1)?.order||0)+1}, costs:{status:"committed",date:today(),category:ui.costCat!=="all"&&COST_CATS.includes(ui.costCat)?ui.costCat:""}, log:{date:today()},
     selections:{status:"considering",qty:1,category:selFilter.cat!=="all"?selFilter.cat:"Lighting",room:selFilter.room!=="all"&&selFilter.room!=="Unassigned"?selFilter.room:""},
     changes:{status:"proposed",number:Math.max(0,...S.changes.map(c=>+c.number||0))+1,date:today(),requestedBy:"Owner"},
     draws:{status:"upcoming",number:Math.max(0,...S.draws.map(d=>+d.number||0))+1},
@@ -667,6 +888,7 @@ function openForm(kind, id){
   const data = isNew ? defaults : rec;
   let photos = [...(data.photos||[])].filter(isAsset);
   let fileObj = data.file && isAsset(data.file.id) ? {...data.file} : null;
+  let files = (F.fields.find(f=>f.t==="files") ? [...(data[F.fields.find(f=>f.t==="files").k]||[])] : []).filter(r=>r && isAsset(r.id));
   const scrim = $("#scrim"); scrim.classList.remove("lbx");
   scrim.innerHTML = `<form class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" novalidate>
     <h3 id="sheetTitle">${F.single ? F.title : (isNew?"Add ":"Edit ")+F.title.toLowerCase()}</h3>
@@ -677,6 +899,11 @@ function openForm(kind, id){
         return `<div class="field full"><span class="label">${esc(f.l)}</span><div class="thumbs" id="thumbs"></div>
           ${assets ? `<label class="btn upl" for="photoIn">Add photos<input type="file" id="photoIn" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden></label><div class="hint" id="upMsg" aria-live="polite">JPG, PNG or WebP, up to 20 MB each.</div>`
             : `<div class="hint">Photo uploads need Editor access to this page. Ask the page owner to change your access.</div>`}</div>`;
+      }
+      if(f.t==="files"){
+        return `<div class="field full"><span class="label">${esc(f.l)}</span><div class="thumbs" id="filesBox"></div>
+          <label class="btn upl" for="filesIn">Add receipt or invoice<input type="file" id="filesIn" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label>
+          <div class="hint" id="filesMsg" aria-live="polite">Photo or PDF, up to 20 MB each.</div></div>`;
       }
       if(f.t==="file"){
         return `<div class="field full"><span class="label">${esc(f.l)}</span><div id="fileBox"></div>
@@ -721,6 +948,21 @@ function openForm(kind, id){
     if($("#fileBtn")) $("#fileBtn").textContent = "Replace file";
   };
   drawFile();
+  const drawFiles = () => { const b = $("#filesBox"); if(!b) return;
+    b.innerHTML = files.map((r,i)=>`<div class="thumb">${/^image\//.test(r.type||"") ? `<img src="${blob(r.id)}" data-path="${esc(r.id)}" alt="${esc(r.name||"Receipt")}">` : `<span class="pdfmark">PDF</span>`}<button type="button" data-frm="${i}" aria-label="Remove ${esc(r.name||"file")}">✕</button></div>`).join("");
+    b.querySelectorAll("[data-frm]").forEach(x => x.onclick = () => { files.splice(+x.dataset.frm,1); drawFiles(); });
+  };
+  drawFiles();
+  const fsIn = $("#filesIn");
+  if(fsIn) fsIn.onchange = async () => {
+    const list = [...fsIn.files]; fsIn.value = ""; const msg = $("#filesMsg"); let failed = "";
+    for(const [n,file] of list.entries()){
+      msg.textContent = `Uploading ${n+1} of ${list.length}…`;
+      try { const r = await assets.upload(file); files.push({id:r.id, type:r.contentType, name:String(file.name).slice(0,200), size:r.sizeBytes}); drawFiles(); }
+      catch(e){ failed = uploadErr(e, file); }
+    }
+    msg.textContent = failed || "Added. Save to keep them.";
+  };
   const fin = $("#fileIn");
   if(fin) fin.onchange = async () => {
     const file = fin.files[0]; fin.value = ""; if(!file) return; const msg = $("#fileMsg");
@@ -747,6 +989,7 @@ function openForm(kind, id){
     for(const f of F.fields){
       if(f.t==="photos"){ out[f.k] = photos; continue; }
       if(f.t==="file"){ out[f.k] = fileObj; continue; }
+      if(f.t==="files"){ out[f.k] = files; continue; }
       const raw = form.elements.namedItem(f.k).value.trim();
       if(f.req && !raw){ showErr(`${f.l} is required.`); form.elements.namedItem(f.k).focus(); return; }
       if(f.t==="url" && raw && !safeUrl(raw)){ showErr("Links should be a full web address starting with https://"); form.elements.namedItem(f.k).focus(); return; }
@@ -799,6 +1042,10 @@ document.addEventListener("click", async e => {
   if(act==="fCat"){ selFilter.cat = t.dataset.v; render(); return; }
   if(act==="photo"){ openLightbox(t.dataset.coll||"selections", id, t.dataset.i); return; }
   if(act==="ui"){ ui[t.dataset.k] = t.dataset.v; render(); return; }
+  if(act==="costDetail"){ openCostDetail(id); return; }
+  if(act==="receiptView"){ const u = urlCache.get(t.dataset.path)?.url; if(u) window.open(u, "_blank", "noopener"); return; }
+  if(act==="exportCosts"){ exportCosts(); return; }
+  if(act==="exportPayments"){ exportPayments(); return; }
   if(readOnly) return;
   const advance = async (coll, map, extra) => {
     const r = S[coll].find(x=>x.id===id); if(!r) return;
@@ -821,7 +1068,7 @@ document.addEventListener("click", async e => {
     const c = S.changes.find(x=>x.id===id); if(!c) return;
     t.disabled = true; t.textContent = "Adding…";
     const cid = newId("costs");
-    let err = await save(`costs/${cid}`, {item:`Change order${c.number?` #${c.number}`:""}: ${c.title}`, vendor:"", amount:+c.cost||0, status:"estimate", date:today(), phaseId:c.phaseId||"", notes:"Added from Change orders", changeId:c.id, createdAt:new Date().toISOString()});
+    let err = await save(`costs/${cid}`, {item:`Change order${c.number?` #${c.number}`:""}: ${c.title}`, vendor:"", amount:+c.cost||0, category:"", status:"committed", date:today(), phaseId:c.phaseId||"", notes:"Added from Change orders", changeId:c.id, createdAt:new Date().toISOString()});
     if(!err){ const {id:_, ...body} = c; err = await save(`changes/${id}`, {...body, costId:cid}); }
     if(err){ showNotice(err); t.disabled=false; t.textContent="Add to budget"; }
   }
@@ -832,7 +1079,7 @@ document.addEventListener("click", async e => {
     const s = S.selections.find(x=>x.id===id); if(!s) return;
     t.disabled = true; t.textContent = "Adding…";
     const cid = newId("costs");
-    let err = await save(`costs/${cid}`, {item: s.item + (s.room?` (${s.room})`:""), vendor: s.vendor||"", amount: selTotal(s), status:"estimate", date: today(), phaseId:"", notes:"Added from Selections", selectionId: s.id, createdAt: new Date().toISOString()});
+    let err = await save(`costs/${cid}`, {item: s.item + (s.room?` (${s.room})`:""), vendor: s.vendor||"", amount: selTotal(s), category: s.category==="Appliances"||s.category==="Plumbing fixtures"||s.category==="Lighting" ? "Appliances & fixtures" : "Materials", status: ["chosen","ordered","delivered","installed"].includes(s.status) ? "committed" : "estimate", date: today(), phaseId:"", notes:"Added from Selections", selectionId: s.id, createdAt: new Date().toISOString()});
     if(!err){ const {id:_, ...body} = s; err = await save(`selections/${id}`, {...body, costId: cid}); }
     if(err){ showNotice(err); t.disabled=false; t.textContent="Add to budget"; }
   }
@@ -840,6 +1087,12 @@ document.addEventListener("click", async e => {
   else if(act==="editPhase") openForm("phases", id);
   else if(act==="addCost") openForm("costs");
   else if(act==="editCost") openForm("costs", id);
+  else if(act==="payDel"){
+    if(!t.classList.contains("armed")){ t.classList.add("armed"); t.textContent = "Tap again to remove"; t.style.color = "var(--bad)"; return; }
+    const cur = S.costs.find(x=>x.id===id); if(!cur) return; const {id:_, ...body} = cur;
+    const err = await save(`costs/${id}`, {...body, payments:(body.payments||[]).filter(p=>p.id!==t.dataset.pid)});
+    if(err) showNotice(err); else openCostDetail(id);
+  }
   else if(act==="addLog") openForm("log");
   else if(act==="editLog") openForm("log", id);
   else if(act==="addContact") openForm("contacts");
