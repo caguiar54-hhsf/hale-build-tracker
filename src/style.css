@@ -412,3 +412,20 @@ table.costs{min-width:820px}
 .thumb.add{cursor:pointer;font-size:1.6rem;font-family:var(--f-body);color:var(--muted);border-style:dashed;background:none}
 .thumb.add:hover{color:var(--accent);border-color:var(--accent)}
 .pdfmark{display:grid;place-items:center;width:100%;height:100%;font-family:var(--f-mono);font-weight:600;font-size:.8rem;color:var(--accent)}
+
+/* ---------- loan draws ---------- */
+.srcpick{display:inline-flex;align-items:center;gap:6px;margin-top:6px;font-size:.8rem;color:var(--muted);font-weight:600}
+.srcpick select{border:1px solid var(--line);background:var(--sunk);border-radius:8px;padding:4px 8px;font-size:.82rem;max-width:min(260px,60vw)}
+.drawuse{margin-top:8px;max-width:420px}
+.drawuse .meter{height:8px;margin:0 0 4px}
+.meter.fund{height:12px;margin:2px 0 10px}
+.sheet.wide{max-width:720px}
+.tablebox.flat{box-shadow:none}
+table.mini{min-width:0;font-size:.88rem}
+table.mini th,table.mini td{padding:7px 10px}
+@media (max-width:640px){
+  .tablebox.flat table.mini thead{display:table-header-group}
+  .tablebox.flat table.mini tbody{display:table-row-group}
+  .tablebox.flat table.mini tr{display:table-row;padding:0}
+  .tablebox.flat table.mini td{display:table-cell;padding:7px 8px;border-top:1px solid var(--line)}
+}

@@ -35,7 +35,39 @@ const STATUS = {todo:"Not started", active:"In progress", done:"Done"};
 const INSP = {none:"No inspection", scheduled:"Scheduled", passed:"Passed", failed:"Failed"};
 const COST_ST = {estimate:"Quote / estimate", committed:"Contracted or ordered", paid:"Paid in full"};
 const COST_CATS = ["Labor","Materials","Subcontractor","Permits & fees","Professional services","Equipment & rentals","Utilities & hookups","Appliances & fixtures","Insurance & loan costs","Other"];
-const PAY_METHODS = ["Check","Bank transfer","Credit card","Cash","Loan draw","Other"];
+const PAY_METHODS = ["Check","Bank transfer","Credit card","Cash","Other"];
+/* Where a payment's money came from: "own" (their own money), "draw:<id>" (a construction-loan draw).
+   Older payments may only say method "Loan draw" (loan, draw not chosen) or nothing at all (not specified). */
+function srcOf(p){
+  if(p.source==="own") return {type:"own"};
+  if(typeof p.source==="string" && p.source.startsWith("draw:")){ const id = p.source.slice(5); return S.draws.some(d=>d.id===id) ? {type:"draw", id} : {type:"loan"}; }
+  if(p.method==="Loan draw") return {type:"loan"};
+  return {type:"unset"};
+}
+const drawLabel = d => `Draw ${d.number??""}${d.milestone?` · ${d.milestone}`:""}`;
+function srcLabel(p){ const s = srcOf(p); if(s.type==="own") return "Own money"; if(s.type==="draw"){ const d = S.draws.find(x=>x.id===s.id); return d ? drawLabel(d) : "Loan"; } if(s.type==="loan") return "Loan (draw not chosen)"; return "Source not set"; }
+function drawSpend(){
+  const map = {}; S.draws.forEach(d => map[d.id] = {spent:0, items:[]});
+  S.costs.forEach(c => payList(c).forEach(p => { const s = srcOf(p); if(s.type==="draw"){ map[s.id].spent += +p.amount||0; map[s.id].items.push({c,p}); } }));
+  return map;
+}
+function fundingSplit(){
+  let loan=0, own=0, unset=0, nUnset=0;
+  S.costs.forEach(c => payList(c).forEach(p => { const a = +p.amount||0; const s = srcOf(p);
+    if(s.type==="draw"||s.type==="loan") loan += a; else if(s.type==="own") own += a; else { unset += a; nUnset++; } }));
+  return {loan, own, unset, nUnset};
+}
+function defaultSource(){
+  const sp = drawSpend();
+  const open = S.draws.filter(d => d.status==="funded" && (+d.amount||0) - sp[d.id].spent > 0.004);
+  return open.length ? "draw:" + open[open.length-1].id : "own";
+}
+function sourceOptions(sel){
+  const opts = [["own","Own money"], ...S.draws.map(d => ["draw:"+d.id, drawLabel(d) + (d.status==="funded" ? "" : ` (${(DRAW_ST[d.status]||"").toLowerCase()})`)])];
+  if(sel && !opts.some(o=>o[0]===sel)) opts.unshift([sel, sel==="loan" ? "Loan (draw not chosen)" : "Source not set"]);
+  return opts.map(([v,l]) => `<option value="${esc(v)}" ${v===sel?"selected":""}>${esc(l)}</option>`).join("");
+}
+const srcValue = p => { const s = srcOf(p); return s.type==="own" ? "own" : s.type==="draw" ? "draw:"+s.id : s.type; };
 const STATE = {quote:["Quote",""], committed:["Not paid yet","active"], partial:["Partly paid","active"], held:["Retainage held","held"], paid:["Paid","done"]};
 const catOf = c => c.category || "Uncategorized";
 
@@ -156,6 +188,10 @@ function vOverview(){
   const aCO = S.changes.filter(c=>c.status==="approved" && +c.cost && !(c.costId && costIds.has(c.costId))); if(aCO.length) attention.push([`${aCO.length} approved change order${aCO.length>1?"s":""} not in the budget yet`,"changes"]);
   const soonSel = S.selections.filter(s=>orderSoon(s)!==null).length; if(soonSel) attention.push([`${soonSel} selection${soonSel>1?"s":""} to order in the next 2 weeks`,"selections"]);
   const waitDraw = S.draws.filter(d=>d.status==="requested"||d.status==="inspected").length; if(waitDraw) attention.push([`${waitDraw} loan draw${waitDraw>1?"s":""} requested, not funded yet`,"draws"]);
+  const dsp = drawSpend();
+  S.draws.forEach(d => { const over = dsp[d.id].spent - (+d.amount||0); if(over > 0.004) attention.push([`${drawLabel(d)}: ${money(over)} more paid than the draw amount`,"draws"]);
+    else if(dsp[d.id].spent > 0 && d.status!=="funded") attention.push([`${drawLabel(d)}: payments recorded before the draw is funded`,"draws"]); });
+  const fs = fundingSplit(); if(fs.nUnset && S.draws.length) attention.push([`${fs.nUnset} payment${fs.nUnset>1?"s don't":" doesn't"} say if it came from the loan or your own money`,"budget"]);
   const nP = S.punch.filter(p=>p.status==="open").length; if(nP) attention.push([`${nP} open punch list item${nP>1?"s":""}`,"punch"]);
   const failed = S.phases.filter(p=>p.inspectionStatus==="failed").length; if(failed) attention.push([`${failed} failed inspection${failed>1?"s":""} to re-schedule`,"phases"]);
   const t = totals();
@@ -262,6 +298,12 @@ function vBudget(){
     <div class="tile" style="border-top-color:var(--line)"><div class="label">Quotes pending</div><div class="v num">${money(t.quoted)}</div><div class="hint">Not agreed yet</div></div>
     <div class="tile" style="border-top-color:${t.left<0?"var(--bad)":"var(--good)"}"><div class="label">Left in budget</div><div class="v num" style="color:${t.left<0?"var(--bad)":"inherit"}">${t.budget?money(t.left):"—"}</div><div class="hint">After everything above</div></div>
   </div>
+  ${(()=>{ const f = fundingSplit(); const tot = f.loan+f.own+f.unset; if(!tot) return "";
+    const w = x => (x/tot*100).toFixed(2);
+    return `<div class="panel" style="margin-bottom:16px"><div class="toolbar" style="margin-bottom:10px"><h3 style="margin:0">Where the money came from</h3><a class="ext" href="#draws">Loan draws</a></div>
+      <div class="meter fund"><div style="width:${w(f.loan)}%;background:var(--accent)"></div><div style="width:${w(f.own)}%;background:var(--good)"></div><div style="width:${w(f.unset)}%;background:var(--line)"></div></div>
+      <div class="legend num"><span style="--c:var(--accent)">Construction loan ${money(f.loan)}</span><span style="--c:var(--good)">Own money ${money(f.own)}</span>${f.unset?`<span style="--c:var(--line)">Not specified ${money(f.unset)}</span>`:""}</div>
+      ${f.nUnset ? `<p class="hint" style="margin:8px 0 0">${f.nUnset} payment${f.nUnset>1?"s don't":" doesn't"} say where the money came from. Open the cost and pick the source under Payments.</p>` : ""}</div>`; })()}
   ${rows.length ? `<div class="panel" style="margin-bottom:16px">
     <div class="toolbar" style="margin-bottom:12px"><h3 style="margin:0">Spending by ${ {phase:"phase",category:"category",vendor:"vendor"}[ui.spendBy] }</h3>${seg("spendBy",[["category","Category"],["vendor","Vendor"],["phase","Phase"]])}</div>
     <div class="bars">${rows.map(r=>`<div class="bar"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
@@ -315,7 +357,8 @@ function openCostDetail(id){
     <h4 class="cd-h">Payments</h4>
     ${m.pays.length ? `<div class="pays">${m.pays.map(p=>`<div class="pay">
         <div style="min-width:0"><div><b class="num">${money(p.amount)}</b> ${p.kind==="release"?`<span class="pill held">Retainage release</span>`:""}</div>
-          <div class="hint">${[fmtDate(p.date), p.method, p.ref?`#${p.ref}`:"", +p.retained?`${money(p.retained)} retainage held`:"", p.note].filter(Boolean).map(esc).join(" · ")}</div></div>
+          <div class="hint">${[fmtDate(p.date), p.method==="Loan draw"?"":p.method, p.ref?`#${p.ref}`:"", +p.retained?`${money(p.retained)} retainage held`:"", p.note].filter(Boolean).map(esc).join(" · ")}</div>
+          ${readOnly ? `<div class="hint">From: ${esc(srcLabel(p))}</div>` : `<label class="srcpick"><span>From</span><select data-src-pid="${esc(p.id)}" data-id="${esc(c.id)}" aria-label="Where this payment's money came from">${sourceOptions(srcValue(p))}</select></label>`}</div>
         ${!p.legacy && !readOnly ? `<button type="button" class="iconbtn" data-act="payDel" data-id="${esc(c.id)}" data-pid="${esc(p.id)}">Remove</button>` : ""}
       </div>`).join("")}</div>` : `<p class="empty" style="margin:0">No payments yet.</p>`}
 
@@ -325,6 +368,7 @@ function openCostDetail(id){
         <label class="field" for="payDate"><span class="label">Date</span><input id="payDate" type="date" value="${today()}"></label>
         ${m.pct ? `<label class="field" for="payHeld"><span class="label">Retainage held back ($)</span><input id="payHeld" type="number" inputmode="decimal" step="any"></label>
           <div class="field"><span class="label">Paid now</span><div class="paynow num" id="payNow">—</div></div>` : ""}
+        <label class="field" for="paySrc"><span class="label">Paid from</span><select id="paySrc">${sourceOptions(defaultSource())}</select></label>
         <label class="field" for="payMethod"><span class="label">Paid by</span><select id="payMethod">${PAY_METHODS.map(x=>`<option>${x}</option>`).join("")}</select></label>
         <label class="field" for="payRef"><span class="label">Check or reference no.</span><input id="payRef" placeholder="Optional"></label>
         <label class="field full" for="payNote"><span class="label">Note</span><input id="payNote" placeholder="e.g. Progress payment 2 of 4"></label>
@@ -337,6 +381,7 @@ function openCostDetail(id){
       <div class="fields">
         <label class="field" for="relAmt"><span class="label">Release retainage ($)</span><input id="relAmt" type="number" inputmode="decimal" step="any" value="${m.held}"></label>
         <label class="field" for="relDate"><span class="label">Date</span><input id="relDate" type="date" value="${today()}"></label>
+        <label class="field full" for="relSrc"><span class="label">Paid from</span><select id="relSrc">${sourceOptions(defaultSource())}</select></label>
       </div>
       <div class="err" id="relErr" hidden></div>
       <button class="btn" type="submit">Release and pay</button>
@@ -378,7 +423,7 @@ function openCostDetail(id){
       if(h<0 || h>b){ err.textContent = "Retainage can't be more than the amount billed."; err.hidden = false; return; }
       const out = base();
       out.payments.push({ id:newId(), kind:"payment", date:$("#payDate").value||today(), amount:+(b-h).toFixed(2), retained:+h.toFixed(2),
-        method:$("#payMethod").value, ref:$("#payRef").value.trim(), note:$("#payNote").value.trim(), by: me||"" });
+        source:$("#paySrc").value, method:$("#payMethod").value, ref:$("#payRef").value.trim(), note:$("#payNote").value.trim(), by: me||"" });
       if(out.status==="estimate") out.status = "committed";
       if(!out.amount) out.amount = +(b).toFixed(2);
       pf.querySelector("[type=submit]").disabled = true;
@@ -390,10 +435,17 @@ function openCostDetail(id){
     const err = $("#relErr"); const a = +$("#relAmt").value;
     if(!(a>0) || a > m.held + 0.004){ err.textContent = `Enter an amount up to ${money(m.held)}.`; err.hidden = false; return; }
     const out = base();
-    out.payments.push({ id:newId(), kind:"release", date:$("#relDate").value||today(), amount:+a.toFixed(2), retained:0, method:"", ref:"", note:"Retainage released", by: me||"" });
+    out.payments.push({ id:newId(), kind:"release", date:$("#relDate").value||today(), amount:+a.toFixed(2), retained:0, source:$("#relSrc").value, method:"", ref:"", note:"Retainage released", by: me||"" });
     rf.querySelector("[type=submit]").disabled = true;
     await commit(out, err);
   };
+  document.querySelectorAll("#sheet [data-src-pid]").forEach(sel => sel.onchange = async () => {
+    const out = base(); const pid = sel.dataset.srcPid;
+    const p = pid==="legacy" ? out.payments[0] : out.payments.find(x=>x.id===pid); if(!p) return;
+    p.source = sel.value; if(p.method==="Loan draw") p.method = "";
+    sel.disabled = true; const err = await save(`costs/${id}`, out);
+    if(err){ showNotice(err); sel.disabled = false; } else openCostDetail(id);
+  });
   const rc = $("#rcIn");
   if(rc) rc.onchange = async () => {
     const files = [...rc.files]; rc.value = ""; const msg = $("#rcMsg"); const added = []; let failed = "";
@@ -436,10 +488,10 @@ function exportCosts(){
 function exportPayments(){
   const rows = [];
   S.costs.forEach(c => payList(c).forEach(p => rows.push([p.date||"", c.item, c.vendor||"", catOf(c), p.kind==="release"?"Retainage release":"Payment",
-    +p.amount||0, +p.retained||0, (+p.amount||0)+(+p.retained||0), p.method||"", p.ref||"", p.note||"", memberName(p.by)||""])));
+    +p.amount||0, +p.retained||0, (+p.amount||0)+(+p.retained||0), srcLabel(p), p.method==="Loan draw"?"":(p.method||""), p.ref||"", p.note||"", memberName(p.by)||""])));
   rows.sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
   downloadCsv(`${slug(S.project.name||"house-build")}-payments-${today()}.csv`,
-    ["Date","Item","Vendor","Category","Type","Amount paid","Retainage held","Amount billed","Paid by","Reference","Note","Recorded by"], rows);
+    ["Date","Item","Vendor","Category","Type","Amount paid","Retainage held","Amount billed","Paid from","Paid by","Reference","Note","Recorded by"], rows);
 }
 
 function orderSoon(s){ if(!s.orderBy || ["ordered","delivered","installed"].includes(s.status)) return null; const d = daysTo(s.orderBy); return d!==null && d<=14 ? d : null; }
@@ -622,30 +674,146 @@ function vChanges(){
 
 function vDraws(){
   const loan = +S.project.loanAmount || 0;
+  const sp = drawSpend(), f = fundingSplit();
   const funded = S.draws.filter(d=>d.status==="funded").reduce((a,d)=>a+(+d.amount||0),0);
+  const spentFunded = S.draws.filter(d=>d.status==="funded").reduce((a,d)=>a+sp[d.id].spent,0);
   const waiting = S.draws.filter(d=>d.status==="requested"||d.status==="inspected");
   const scheduled = S.draws.reduce((a,d)=>a+(+d.amount||0),0);
+  const onHand = funded - spentFunded;
   return `
   <div class="viewhead"><h2>Loan draws</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn write" data-act="project">${loan?"Edit loan details":"Set loan amount"}</button><button class="btn primary write" data-act="add" data-kind="draws">Add draw</button></div></div>
   <div class="tiles">
     <div class="tile"><div class="label">Construction loan</div><div class="v num">${loan?money(loan):"—"}</div><div class="hint">${esc(S.project.lender||"Lender not set")}</div></div>
-    <div class="tile"><div class="label">Funded</div><div class="v num">${money(funded)}</div><div class="hint">${loan?Math.round(funded/loan*100)+"% of loan":""}</div></div>
-    <div class="tile"><div class="label">Requested, waiting</div><div class="v num">${money(waiting.reduce((a,d)=>a+(+d.amount||0),0))}</div><div class="hint">${waiting.length} draw${waiting.length===1?"":"s"}</div></div>
-    <div class="tile"><div class="label">Left to draw</div><div class="v num">${loan?money(loan-funded):"—"}</div><div class="hint">${loan && scheduled!==loan ? `Draws listed total ${money(scheduled)}` : ""}</div></div>
+    <div class="tile" style="border-top-color:var(--good)"><div class="label">Funded</div><div class="v num">${money(funded)}</div><div class="hint">${loan?Math.round(funded/loan*100)+"% of loan":""}</div></div>
+    <div class="tile" style="border-top-color:var(--accent)"><div class="label">Spent from draws</div><div class="v num">${money(f.loan)}</div><div class="hint">Payments made with loan money</div></div>
+    <div class="tile" style="border-top-color:${onHand<0?"var(--bad)":"var(--warn)"}"><div class="label">Loan money on hand</div><div class="v num" style="color:${onHand<0?"var(--bad)":"inherit"}">${money(onHand)}</div><div class="hint">${onHand<0?"More paid than funded":"Funded but not spent yet"}</div></div>
+    <div class="tile" style="border-top-color:var(--line)"><div class="label">Requested, waiting</div><div class="v num">${money(waiting.reduce((a,d)=>a+(+d.amount||0),0))}</div><div class="hint">${waiting.length} draw${waiting.length===1?"":"s"}</div></div>
+    <div class="tile" style="border-top-color:var(--line)"><div class="label">Left to draw</div><div class="v num">${loan?money(loan-funded):"—"}</div><div class="hint">${loan && scheduled && Math.abs(scheduled-loan)>0.5 ? `Draws listed total ${money(scheduled)}` : ""}</div></div>
   </div>
-  ${loan?`<div class="meter" style="margin:0 0 16px"><div class="paid" style="width:${Math.min(100,funded/loan*100)}%"></div><div class="est" style="width:${Math.min(100-Math.min(100,funded/loan*100),waiting.reduce((a,d)=>a+(+d.amount||0),0)/loan*100)}%"></div></div>`:""}
+  ${loan?`<div class="meter" style="margin:0 0 6px"><div style="width:${Math.min(100,f.loan/loan*100)}%;background:var(--accent)"></div><div class="paid" style="width:${Math.max(0,Math.min(100,(funded-f.loan)/loan*100))}%"></div><div class="est" style="width:${Math.min(100,waiting.reduce((a,d)=>a+(+d.amount||0),0)/loan*100)}%"></div></div>
+    <div class="legend" style="margin-bottom:16px"><span style="--c:var(--accent)">Spent</span><span style="--c:var(--good)">Funded, on hand</span><span style="--c:var(--warn)">Requested</span></div>`:""}
+  ${f.own ? `<p class="hint" style="margin:-4px 0 14px">Your own money paid so far: <b class="num" style="color:var(--ink)">${money(f.own)}</b>.</p>` : ""}
   <div class="panel" style="padding-block:2px"><div class="rows">
-    ${S.draws.length ? S.draws.map(d=>`<div class="row"><div style="min-width:0">
-        <div class="t">Draw ${esc(d.number??"")} · ${esc(d.milestone)}</div>
-        <div class="meta">${d.targetDate?`<span>Expected ${fmtDate(d.targetDate)}</span>`:""}${d.requestedDate?`<span>Requested ${fmtDate(d.requestedDate)}</span>`:""}${d.fundedDate?`<span>Funded ${fmtDate(d.fundedDate)}</span>`:""}</div>
+    ${S.draws.length ? S.draws.map(d=>{ const amt = +d.amount||0, spent = sp[d.id].spent, left = amt - spent;
+      const warn = spent > amt + 0.004 ? `<span class="pill failed">Over by ${money(spent-amt)}</span>` : spent>0 && d.status!=="funded" ? `<span class="pill scheduled">Paying before it's funded</span>` : "";
+      const ph = d.phaseId ? S.phases.find(p=>p.id===d.phaseId) : null;
+      return `<div class="row"><div style="min-width:0">
+        <div class="t">${esc(drawLabel(d))}</div>
+        <div class="meta">${ph?`<span>Covers ${esc(ph.title)}</span>`:""}${d.targetDate?`<span>Expected ${fmtDate(d.targetDate)}</span>`:""}${d.requestedDate?`<span>Requested ${fmtDate(d.requestedDate)}</span>`:""}${d.fundedDate?`<span>Funded ${fmtDate(d.fundedDate)}</span>`:""}</div>
+        ${amt||spent ? `<div class="drawuse"><div class="meter"><div style="width:${amt?Math.min(100,spent/amt*100):100}%;background:${spent>amt+0.004?"var(--bad)":"var(--accent)"}"></div></div>
+          <div class="hint num">${money(spent)} spent of ${money(amt)} · ${left>=0?`${money(left)} left`:`${money(-left)} over`} · ${sp[d.id].items.length} payment${sp[d.id].items.length===1?"":"s"}</div></div>` : ""}
+        ${warn ? `<div style="margin-top:6px">${warn}</div>` : ""}
         ${d.notes?`<div class="txt">${esc(d.notes)}</div>`:""}
       </div><div class="side">
         ${pill(DRAW_CLASS[d.status]||"", DRAW_ST[d.status]||"Upcoming", "drawNext", d.id)}
-        <span class="amt">${money(d.amount)}</span>${loan&&+d.amount?`<span class="hint">${(d.amount/loan*100).toFixed(0)}% of loan</span>`:""}
-        <button class="iconbtn write" data-act="edit" data-kind="draws" data-id="${esc(d.id)}">Edit</button>
-      </div></div>`).join("")
-    : `<p class="empty" style="padding:14px 0">No draws yet. Copy the draw schedule from the construction loan agreement, usually tied to milestones like foundation, framing, dried-in and final. Tap a draw's status to move it from requested to inspected to funded.</p>`}
-  </div></div>`;
+        <span class="amt">${money(amt)}</span>${loan&&amt?`<span class="hint">${(amt/loan*100).toFixed(0)}% of loan</span>`:""}
+        <span style="display:flex;gap:12px"><button class="iconbtn" data-act="drawPacket" data-id="${esc(d.id)}">Packet</button><button class="iconbtn write" data-act="edit" data-kind="draws" data-id="${esc(d.id)}">Edit</button></span>
+      </div></div>`; }).join("")
+    : `<p class="empty" style="padding:14px 0">No draws yet. Copy the draw schedule from the construction loan agreement, usually tied to milestones like foundation, framing, dried-in and final. Then, when you record a payment on the Budget tab, choose which draw paid for it.</p>`}
+  </div></div>
+  ${S.draws.length ? `<p class="hint" style="margin-top:10px">Open a draw's packet when you request it: it lists what the money paid for, receipts and lien releases, ready to send to the lender.</p>` : ""}`;
+}
+
+/* ---------- draw packet for the lender ---------- */
+function packetData(d){
+  const sp = drawSpend()[d.id] || {spent:0, items:[]};
+  const ph = d.phaseId ? S.phases.find(p=>p.id===d.phaseId) : null;
+  const items = [...sp.items].sort((a,b)=>String(a.p.date).localeCompare(String(b.p.date)));
+  const phaseCosts = ph ? S.costs.filter(c=>c.phaseId===ph.id).map(c=>({c, m:costMath(c)})) : [];
+  const vend = {}; items.forEach(({c})=>{ const n=(c.vendor||"").trim(); if(n) vend[slug(n)] = n; });
+  const liens = Object.entries(vend).map(([k,n]) => ({name:n, ok: !!S.vendors.find(v=>v.id===k)?.lienRelease, date: S.vendors.find(v=>v.id===k)?.lienDate||""}));
+  const receipts = []; const seen = new Set();
+  items.forEach(({c}) => (c.receipts||[]).forEach(r => { if(r && isAsset(r.id) && !seen.has(r.id)){ seen.add(r.id); receipts.push({...r, item:c.item, vendor:c.vendor||""}); } }));
+  return {sp, ph, items, phaseCosts, liens, receipts};
+}
+function openDrawPacket(id){
+  const d = S.draws.find(x=>x.id===id); if(!d) return;
+  const {sp, ph, items, phaseCosts, liens, receipts} = packetData(d);
+  const amt = +d.amount||0;
+  const scrim = $("#scrim"); scrim.classList.remove("lbx");
+  scrim.innerHTML = `<div class="sheet wide" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="cd-head"><div style="min-width:0"><h3 id="sheetTitle" style="margin-bottom:2px">${esc(drawLabel(d))}</h3>
+      <div class="hint">${esc([S.project.lender, d.requestedDate?`Requested ${fmtDate(d.requestedDate)}`:"", d.fundedDate?`Funded ${fmtDate(d.fundedDate)}`:""].filter(Boolean).join(" · "))}</div></div>
+      <span class="pill ${DRAW_CLASS[d.status]||""}">${DRAW_ST[d.status]||"Upcoming"}</span></div>
+    <div class="cd-sum">
+      <div><span class="label">Draw amount</span><b class="num">${money(amt)}</b></div>
+      <div><span class="label">Spent from it</span><b class="num" style="color:var(--accent)">${money(sp.spent)}</b></div>
+      <div><span class="label">${amt-sp.spent>=0?"Left":"Over"}</span><b class="num" style="color:${amt-sp.spent<0?"var(--bad)":"inherit"}">${money(Math.abs(amt-sp.spent))}</b></div>
+    </div>
+    ${ph ? `<h4 class="cd-h">Milestone: ${esc(ph.title)}</h4><p class="hint" style="margin:0">${esc(STATUS[ph.status]||"Not started")}${ph.inspection?` · ${esc(ph.inspection)} inspection: ${esc(INSP[ph.inspectionStatus||"none"])}${ph.inspectionDate?` ${fmtDate(ph.inspectionDate)}`:""}`:""}</p>` : ""}
+
+    <h4 class="cd-h">Paid from this draw</h4>
+    ${items.length ? `<div class="tablebox flat"><table class="mini"><thead><tr><th>Date</th><th>Vendor</th><th>For</th><th class="r">Amount</th></tr></thead><tbody>
+      ${items.map(({c,p})=>`<tr class="clickable" data-act="costDetail" data-id="${esc(c.id)}"><td class="mono">${fmtDate(p.date)}</td><td>${esc(c.vendor||"—")}</td><td>${esc(c.item)}${p.kind==="release"?" (retainage)":""}${(c.receipts||[]).length?` <span class="rc">${(c.receipts||[]).length} receipt${(c.receipts||[]).length>1?"s":""}</span>`:""}</td><td class="r mono">${money(p.amount)}</td></tr>`).join("")}
+    </tbody></table></div>` : `<p class="empty" style="margin:0">No payments assigned to this draw yet. On the Budget tab, open a cost and choose this draw under "Paid from".</p>`}
+
+    ${phaseCosts.length ? `<h4 class="cd-h">All costs for ${esc(ph.title)}</h4><div class="tablebox flat"><table class="mini"><thead><tr><th>Item</th><th>Vendor</th><th class="r">Amount</th><th class="r">Paid</th></tr></thead><tbody>
+      ${phaseCosts.map(({c,m})=>`<tr><td>${esc(c.item)}</td><td>${esc(c.vendor||"—")}</td><td class="r mono">${money(m.amt)}</td><td class="r mono">${money(m.paid)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+
+    <h4 class="cd-h">Lien releases</h4>
+    ${liens.length ? `<div class="pays">${liens.map(l=>`<div class="pay"><span>${esc(l.name)}</span>${l.ok?`<span class="pill done">Received${l.date?` ${fmtDate(l.date)}`:""}</span>`:`<span class="pill failed">Missing</span>`}</div>`).join("")}</div>
+      ${liens.some(l=>!l.ok) ? `<p class="hint" style="margin:6px 0 0">Lenders usually want a lien release from everyone paid. Check them off on the Vendors page once received.</p>` : ""}`
+      : `<p class="empty" style="margin:0">Vendors paid from this draw will appear here.</p>`}
+
+    <div class="foot">
+      <button type="button" class="btn" id="pkCsv">Download CSV</button>
+      <div class="right"><button type="button" class="btn" id="pkPrint">Print or save PDF</button><button type="button" class="btn primary" id="cdClose">Done</button></div>
+    </div>
+  </div>`;
+  scrim.hidden = false;
+  $("#cdClose").onclick = closeSheet;
+  scrim.onclick = e => { if(e.target===scrim) closeSheet(); };
+  $("#sheet").onkeydown = e => { if(e.key==="Escape") closeSheet(); };
+  $("#pkCsv").onclick = () => exportPacketCsv(d);
+  $("#pkPrint").onclick = () => printPacket(d);
+}
+function exportPacketCsv(d){
+  const {sp, ph, items, liens} = packetData(d);
+  const rows = [
+    ["Draw", d.number??""], ["Milestone", d.milestone||""], ["Phase", ph?.title||""], ["Draw amount", +d.amount||0], ["Status", DRAW_ST[d.status]||""],
+    ["Requested", d.requestedDate||""], ["Funded", d.fundedDate||""], ["Spent from draw", sp.spent], ["Left", (+d.amount||0)-sp.spent], [],
+    ["Date","Vendor","Item","Category","Type","Amount paid","Retainage held","Paid by","Reference","Receipts"],
+    ...items.map(({c,p}) => [p.date||"", c.vendor||"", c.item, catOf(c), p.kind==="release"?"Retainage release":"Payment", +p.amount||0, +p.retained||0, p.method==="Loan draw"?"":(p.method||""), p.ref||"", (c.receipts||[]).map(r=>r.name||"file").join("; ")]),
+    [], ["Vendor","Lien release"], ...liens.map(l => [l.name, l.ok ? `Received ${l.date}` : "Missing"]),
+  ];
+  downloadCsv(`${slug(S.project.name||"house-build")}-draw-${d.number??"x"}-${today()}.csv`, rows[0], rows.slice(1));
+}
+async function printPacket(d){
+  const w = window.open("", "_blank");
+  if(!w){ showNotice("Your browser blocked the print window. Allow pop-ups for this site and try again."); return; }
+  w.document.write("<p style='font-family:system-ui;padding:24px'>Preparing the draw packet…</p>");
+  const {sp, ph, items, phaseCosts, liens, receipts} = packetData(d);
+  let urls = {};
+  if(receipts.length){ const { data } = await supabase.storage.from("files").createSignedUrls(receipts.map(r=>r.id), 7*24*3600); (data||[]).forEach(r => { if(r.signedUrl) urls[r.path] = r.signedUrl; }); }
+  const e = esc, amt = +d.amount||0;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${e(S.project.name||"House build")} - ${e(drawLabel(d))}</title>
+  <style>body{font:13px/1.45 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#0F1E2E;margin:32px;max-width:900px}
+  h1{font-size:20px;margin:0 0 2px}h2{font-size:14px;margin:22px 0 6px;border-bottom:1px solid #DCE4EC;padding-bottom:4px}
+  .muted{color:#5D7083}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:5px 6px;border-bottom:1px solid #EEF3F7;vertical-align:top}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#5D7083}.r{text-align:right}.num{font-variant-numeric:tabular-nums}
+  .sum{display:flex;gap:28px;margin:14px 0}.sum b{display:block;font-size:17px}.bad{color:#C4433A}.ok{color:#1A8A5A}
+  .rc{page-break-inside:avoid;margin:12px 0}.rc img{max-width:100%;max-height:640px;border:1px solid #DCE4EC}
+  @media print{body{margin:12mm}a{color:inherit}}</style></head><body>
+  <h1>${e(S.project.name||"House build")}: ${e(drawLabel(d))}</h1>
+  <div class="muted">${e([S.project.address, S.project.lender?`Lender: ${S.project.lender}`:"", S.project.loanAmount?`Loan ${money(S.project.loanAmount)}`:"", `Prepared ${fmtDate(today())}`].filter(Boolean).join(" · "))}</div>
+  <div class="sum num"><div><span class="muted">Draw amount</span><b>${money(amt)}</b></div><div><span class="muted">Status</span><b>${e(DRAW_ST[d.status]||"")}</b></div>
+    <div><span class="muted">Spent from draw</span><b>${money(sp.spent)}</b></div><div><span class="muted">${amt-sp.spent>=0?"Left":"Over"}</span><b class="${amt-sp.spent<0?"bad":""}">${money(Math.abs(amt-sp.spent))}</b></div></div>
+  ${ph?`<h2>Milestone</h2><p>${e(ph.title)}: ${e(STATUS[ph.status]||"")}${ph.inspection?`. ${e(ph.inspection)} inspection: ${e(INSP[ph.inspectionStatus||"none"])}${ph.inspectionDate?` (${fmtDate(ph.inspectionDate)})`:""}`:""}</p>`:""}
+  <h2>Payments from this draw</h2>
+  ${items.length?`<table class="num"><tr><th>Date</th><th>Vendor</th><th>Item</th><th>Category</th><th>Paid by</th><th>Ref.</th><th class="r">Amount</th></tr>
+    ${items.map(({c,p})=>`<tr><td>${fmtDate(p.date)}</td><td>${e(c.vendor||"")}</td><td>${e(c.item)}${p.kind==="release"?" (retainage release)":""}</td><td>${e(catOf(c))}</td><td>${e(p.method==="Loan draw"?"":(p.method||""))}</td><td>${e(p.ref||"")}</td><td class="r">${money(p.amount)}</td></tr>`).join("")}
+    <tr><th colspan="6">Total</th><th class="r">${money(sp.spent)}</th></tr></table>`:`<p class="muted">No payments assigned to this draw.</p>`}
+  ${phaseCosts.length?`<h2>All costs for ${e(ph.title)}</h2><table class="num"><tr><th>Item</th><th>Vendor</th><th class="r">Amount</th><th class="r">Paid</th><th class="r">Still owed</th></tr>
+    ${phaseCosts.map(({c,m})=>`<tr><td>${e(c.item)}</td><td>${e(c.vendor||"")}</td><td class="r">${money(m.amt)}</td><td class="r">${money(m.paid)}</td><td class="r">${money(m.balance)}</td></tr>`).join("")}</table>`:""}
+  <h2>Lien releases</h2>
+  ${liens.length?`<table><tr><th>Vendor</th><th>Status</th></tr>${liens.map(l=>`<tr><td>${e(l.name)}</td><td class="${l.ok?"ok":"bad"}">${l.ok?`Received${l.date?` ${fmtDate(l.date)}`:""}`:"Missing"}</td></tr>`).join("")}</table>`:`<p class="muted">None yet.</p>`}
+  ${receipts.length?`<h2>Receipts and invoices</h2>${receipts.map(r=>`<div class="rc"><div><b>${e(r.vendor||"")}</b> ${e(r.item)} <span class="muted">${e(r.name||"")}</span></div>
+    ${urls[r.id] ? (/^image\//.test(r.type||"") ? `<img src="${e(urls[r.id])}" alt="">` : `<a href="${e(urls[r.id])}">Open ${e(r.name||"PDF")}</a> <span class="muted">(link works for 7 days)</span>`) : `<span class="muted">File unavailable</span>`}</div>`).join("")}`:""}
+  </body></html>`;
+  w.document.open(); w.document.write(html); w.document.close();
+  const go = () => { try { w.focus(); w.print(); } catch {} };
+  const imgs = [...w.document.images]; let left = imgs.length;
+  if(!left) setTimeout(go, 300); else imgs.forEach(im => { const done = () => { if(--left===0) setTimeout(go, 200); }; if(im.complete) done(); else { im.onload = done; im.onerror = done; } });
 }
 
 function vVendors(){
@@ -833,6 +1001,7 @@ const FORMS = {
     {k:"description",l:"Details",t:"textarea",full:1,ph:"What's changing, why, and what the contractor quoted."}]},
   draws: { title:"Loan draw", coll:"draws", post:o=>{ if(o.status!=="upcoming" && !o.requestedDate) o.requestedDate=today(); if(o.status==="funded" && !o.fundedDate) o.fundedDate=today(); }, fields:[
     {k:"milestone",l:"Milestone",full:1,req:1,ph:"e.g. Foundation complete"},
+    {k:"phaseId",l:"Covers phase",t:"select",o:()=>[["","Not linked"], ...S.phases.map(p=>[p.id,p.title])],full:1},
     {k:"number",l:"Draw no.",t:"number"},
     {k:"amount",l:"Amount ($)",t:"number"},
     {k:"status",l:"Status",t:"select",o:Object.entries(DRAW_ST)},
@@ -1043,6 +1212,7 @@ document.addEventListener("click", async e => {
   if(act==="photo"){ openLightbox(t.dataset.coll||"selections", id, t.dataset.i); return; }
   if(act==="ui"){ ui[t.dataset.k] = t.dataset.v; render(); return; }
   if(act==="costDetail"){ openCostDetail(id); return; }
+  if(act==="drawPacket"){ openDrawPacket(id); return; }
   if(act==="receiptView"){ const u = urlCache.get(t.dataset.path)?.url; if(u) window.open(u, "_blank", "noopener"); return; }
   if(act==="exportCosts"){ exportCosts(); return; }
   if(act==="exportPayments"){ exportPayments(); return; }
